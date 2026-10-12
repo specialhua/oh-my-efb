@@ -194,6 +194,12 @@ class CommandsManager(LocaleMixin):
                 msg += "\n" + self._("No command found.")
         self.bot.send_message(update.effective_chat.id, msg, parse_mode="HTML")
 
+    @staticmethod
+    def _module_title(module: Union[Channel, Middleware]) -> str:
+        if isinstance(module, Middleware):
+            return module.middleware_name
+        return "{} {}".format(module.channel_emoji, module.channel_name)
+
     def extra_usage(self, update: Update, context: CallbackContext):
         assert context.match
         assert isinstance(update, Update)
@@ -211,9 +217,7 @@ class CommandsManager(LocaleMixin):
 
         command = getattr(channel, groupdict['command'])
 
-        msg = "<b>{0} {1}".format(
-            html.escape(channel.channel_emoji),
-            html.escape(channel.channel_name))
+        msg = "<b>{}".format(html.escape(self._module_title(channel)))
         if channel.instance_id:
             msg += " ({})".format(html.escape(channel.instance_id))
         msg += "</b>"
@@ -234,20 +238,18 @@ class CommandsManager(LocaleMixin):
         assert update.message
 
         groupdict = context.match.groupdict()
-        if int(groupdict['id']) >= len(coordinator.slaves):
+        if int(groupdict['id']) >= len(self.modules_list):
             return self.bot.reply_error(update, self._("Invalid module ID. (XC01)"))
 
-        slaves = coordinator.slaves
-
-        channel = slaves[sorted(slaves)[int(groupdict['id'])]]
+        channel = self.modules_list[int(groupdict['id'])]
         functions = channel.get_extra_functions()
 
         if groupdict['command'] not in functions:
             return self.bot.reply_error(update, self._("Command not found in selected module. (XC02)"))
 
         # noinspection PyUnresolvedReferences
-        header = "{} {}: {}\n-------\n".format(
-                channel.channel_emoji, channel.channel_name,
+        header = "{}: {}\n-------\n".format(
+                self._module_title(channel),
                 functions[groupdict['command']].name  # type: ignore
         )
         msg = self.bot.send_message(update.message.chat.id,
