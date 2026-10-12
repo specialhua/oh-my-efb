@@ -1,0 +1,44 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: ehforwarderbot\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2021-05-22 15:29-0700\n"
+"PO-Revision-Date: 2021-05-22 22:30\n"
+"Last-Translator: \n"
+"Language-Team: Japanese\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Crowdin-Project: ehforwarderbot\n"
+"X-Crowdin-Project-ID: 299617\n"
+"X-Crowdin-Language: ja\n"
+"X-Crowdin-File: /ehForwarderBot/docs/_build/locale/support.pot\n"
+"X-Crowdin-File-ID: 159\n"
+"Language: ja_JP\n"
+
+#: ../../support.rst:3
+#: 59233cb2e49348229eb8d404a808edaf
+msgid "Support"
+msgstr ""
+
+#: ../../support.rst:6
+#: f75d7450afa04ee3b2929f799fb3c19c
+msgid "Bug reports and feature requests"
+msgstr ""
+
+#: ../../support.rst:8
+#: 046af0f33ded4193901fc8498e54405c
+msgid "See :doc:`contribution guideline <./contributing>` for details."
+msgstr ""
+
+#: ../../support.rst:11
+#: ffa97ebe1b69430dbd7cf5926d154bf5
+msgid "Questions about development and usage"
+msgstr ""
+
+#: ../../support.rst:13
+#: bb185e4aac22497791989bdb401d804a
+msgid "If you have any question about developing a module for EFB, or about usages, you can always visit our `GitHub Discussions`_ forum or join our `Telegram Group`_ for help."
+msgstr ""
+
