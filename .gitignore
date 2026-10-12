@@ -1,0 +1,21 @@
+# 私有数据：数据目录备份包（含 bot token 与微信登录态）、运维手册
+local/
+
+# 官方 Telegram master，仅留在本地作对照，不纳入仓库
+reference/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.coverage
+
+# macOS
+.DS_Store
