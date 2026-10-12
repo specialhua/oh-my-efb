@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Issues related to modules
+    url: https://efb-modules.1a23.studio/
+    about: Modules-related issues must go to their respective repositories.
+  - name: 中文讨论
+    url: https://github.com/ehForwarderBot/ehForwarderBot/discussions/
+    about: 请移步我们的 GitHub Discussions 社区论坛。
+  - name: GitHub Discussions forum
+    url: https://github.com/ehForwarderBot/ehForwarderBot/discussions/
+    about: Please visit our discussion forum if you have any issue about usage of EFB.
