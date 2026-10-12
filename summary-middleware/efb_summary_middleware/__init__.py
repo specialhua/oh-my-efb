@@ -74,19 +74,13 @@ class SummaryMiddleware(Middleware):
         super().__init__(instance_id)
         self.logger = logging.getLogger(self.middleware_id)
 
-        config = self.load_config()
-        self.targets: List[Target] = config['chats']
-        self.summarizer = Summarizer(
-            base_url=config['base_url'], api_key=config['api_key'], model=config['model'],
-            prompt=config.get('prompt') or "",
-            max_chars=int(config.get('max_chars', 40000)),
-            timeout=float(config.get('timeout', 180)))
         self.store = Store(get_data_path(self.middleware_id) / "messages.db")
-
-        # A restart must not reset the cycle, so the last run is persisted.
-        for target in self.targets:
-            if self.store.get_last_run(target.name) is None:
-                self.store.set_last_run(target.name, time.time())
+        self.targets: List[Target] = []
+        self.config_path = get_config_path(self.middleware_id)
+        self.config_lock = threading.Lock()
+        config = self.load_config()
+        self.config_mtime = self.config_path.stat().st_mtime
+        self.apply_config(config)
 
         self.run_lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -94,7 +88,7 @@ class SummaryMiddleware(Middleware):
         threading.Thread(target=self.schedule_loop, name="summary schedule", daemon=True).start()
 
     def load_config(self) -> Dict[str, Any]:
-        path = get_config_path(self.middleware_id)
+        path = self.config_path
         if not path.exists():
             raise FileNotFoundError("Config file of {} does not exist. ({})".format(self.middleware_id, path))
         with path.open(encoding="utf-8") as f:
@@ -136,6 +130,41 @@ class SummaryMiddleware(Middleware):
             raise ValueError("{}: chat \"{}\" needs \"lookback_days\" and/or \"max_messages\".".format(
                 self.middleware_id, name))
         return Target(name, interval_days, lookback_days, max_messages)
+
+    def apply_config(self, config: Dict[str, Any]):
+        targets: List[Target] = config['chats']
+        running = {i.name: i for i in self.targets}
+        for target in targets:
+            if target.name in running:
+                target.retry_at = running[target.name].retry_at
+                target.failing = running[target.name].failing
+            # A restart must not reset the cycle, so the last run is persisted.
+            if self.store.get_last_run(target.name) is None:
+                self.store.set_last_run(target.name, time.time())
+        self.summarizer = Summarizer(
+            base_url=config['base_url'], api_key=config['api_key'], model=config['model'],
+            prompt=config.get('prompt') or "",
+            max_chars=int(config.get('max_chars', 40000)),
+            timeout=float(config.get('timeout', 180)))
+        self.targets = targets
+
+    def reload_config(self):
+        """Pick up a changed config file. An invalid one is reported and the
+        running config stays in place."""
+        with self.config_lock:
+            try:
+                mtime = self.config_path.stat().st_mtime
+            except OSError:
+                return
+            if mtime == self.config_mtime:
+                return
+            self.config_mtime = mtime
+            try:
+                self.apply_config(self.load_config())
+                self.logger.info("Config reloaded.")
+            except Exception as e:
+                self.logger.exception("Failed to reload config")
+                self.report("⚠️ 群聊总结的配置文件有误，继续使用之前的配置：{}".format(html.escape(str(e)[:500])))
 
     # region Logging messages
 
@@ -190,6 +219,7 @@ class SummaryMiddleware(Middleware):
 
     def schedule_loop(self):
         while not self.stop_event.wait(self.poll_seconds):
+            self.reload_config()
             for target in self.targets:
                 now = time.time()
                 last_run = self.store.get_last_run(target.name) or now
@@ -209,6 +239,7 @@ class SummaryMiddleware(Middleware):
                 "用法:\n    {function_name}\n        汇总所有配置的群\n"
                 "    {function_name} 群名\n        只汇总配置中的这一个群")
     def summary(self, name: str = "") -> str:
+        self.reload_config()
         name = name.strip()
         targets = [i for i in self.targets if not name or i.name == name]
         if not targets:
@@ -243,11 +274,8 @@ class SummaryMiddleware(Middleware):
             ok = False
             self.logger.exception("Failed to summarize %s", target.name)
             if report_errors:
-                try:
-                    self.send_text("⚠️ <b>{}</b> 汇总失败：{}".format(
-                        html.escape(target.name), html.escape(str(e)[:500])))
-                except Exception:
-                    self.logger.exception("Failed to report the error")
+                self.report("⚠️ <b>{}</b> 汇总失败：{}".format(
+                    html.escape(target.name), html.escape(str(e)[:500])))
         if target.lookback_days is not None:
             self.store.prune(target.name, before=time.time() - (target.lookback_days
                                                                 + self.retention_margin_days) * DAY)
@@ -290,6 +318,13 @@ class SummaryMiddleware(Middleware):
         """The bot manager of the Telegram master channel, and the admin to write to."""
         master = coordinator.master
         return master.bot_manager, master.config['admins'][0]  # type: ignore[attr-defined]
+
+    def report(self, text: str):
+        """Tell the admin about a problem; never raises."""
+        try:
+            self.send_text(text)
+        except Exception:
+            self.logger.exception("Failed to report: %s", text)
 
     def send_text(self, text: str):
         bot, chat_id = self.bot()
