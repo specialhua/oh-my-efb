@@ -10,6 +10,8 @@ EH Forwarder Bot（微信 ↔ Telegram）的自用部署与定制开发工作区
 | `telegram-master/` | `efb-telegram-master`（Ovler-Young fork） | `dev-topic-custom-emoji` @ `24c1e44` | [Ovler-Young/efb-telegram-master](https://github.com/Ovler-Young/efb-telegram-master) |
 | `wechat-slave/` | `efb-wechat-slave` | `v2.0.7` | [ehForwarderBot/efb-wechat-slave](https://github.com/ehForwarderBot/efb-wechat-slave) |
 
+另有自己写的中间件 `summary-middleware/`（`specialhua.summary`）：定时用 LLM 总结指定群聊并通过 bot 发送，配置见 [summary-middleware/README.md](summary-middleware/README.md)。它不属于 subtree，没有上游。
+
 版本不是随便定的，三条都踩过坑：
 
 - **core 必须停在 `v2.1.1`**。上游 master 给 `Channel` 加了抽象方法 `get_chat_member_picture`，而微信从端没实现它，装 master 会直接崩在实例化那一步。
@@ -49,6 +51,7 @@ git subtree pull --prefix=wechat-slave upstream-ews v2.0.8 --squash   # 若将�
 pip install ./core
 pip install ./wechat-slave
 pip install ./telegram-master
+pip install ./summary-middleware   # 可选，群聊总结中间件
 ```
 
 安装后必须验证微信从端没有 UOS 痕迹，三项都应为 `False`：
