@@ -65,10 +65,14 @@ class CommandsManager(LocaleMixin):
 
         self.bot.dispatcher.add_handler(self.command_conv)
 
-        self.modules_list: List[Any[SlaveChannel, Middleware]] = []
+    @property
+    def modules_list(self) -> List[Union[SlaveChannel, Middleware]]:
+        # Built on demand: middlewares are initialized after the master channel.
+        modules: List[Union[SlaveChannel, Middleware]] = []
         for i in sorted(coordinator.slaves.keys()):
-            self.modules_list.append(coordinator.slaves[i])
-        self.modules_list.extend(coordinator.middlewares)
+            modules.append(coordinator.slaves[i])
+        modules.extend(coordinator.middlewares)
+        return modules
 
     def register_command(self, message: Message, commands: ETMCommandMsgStorage):
         message_identifier = (message.chat.id, message.message_id)
