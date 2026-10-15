@@ -19,6 +19,7 @@ from ehforwarderbot.types import ModuleID, InstanceID
 from ehforwarderbot.utils import extra, get_config_path, get_data_path
 
 from . import render
+from .jev import DEFAULT_BASE_URL as JEV_BASE_URL, Jev
 from .store import Store
 from .summarizer import Summarizer
 
@@ -121,7 +122,24 @@ class SummaryMiddleware(Middleware):
         if not isinstance(chats, list) or not chats:
             raise ValueError("{}: \"chats\" must list at least one chat name or ID.".format(self.middleware_id))
         data["chats"] = [self.load_target(i, data) for i in chats]
+        data["jev"] = self.load_jev(data.get("jev"))
         return data
+
+    def load_jev(self, entry: Any) -> Optional[Jev]:
+        """Build the Jev client from the optional ``jev`` section."""
+        if entry is None:
+            return None
+        if not isinstance(entry, dict):
+            raise ValueError("{}: \"jev\" must be a mapping.".format(self.middleware_id))
+        for key, required in (("api_key", True), ("model", False), ("base_url", False)):
+            value = entry.get(key)
+            if (required or value is not None) and (not isinstance(value, str) or not value):
+                raise ValueError("{}: \"jev.{}\" must be a non-empty string.".format(self.middleware_id, key))
+        timeout = entry.get("timeout", 60)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError("{}: \"jev.timeout\" must be a positive number.".format(self.middleware_id))
+        return Jev(api_key=entry["api_key"], model=entry.get("model") or "jev-latest",
+                   base_url=entry.get("base_url") or JEV_BASE_URL, timeout=timeout)
 
     def load_target(self, entry: Any, defaults: Dict[str, Any]) -> Target:
         """Build a target from an item of ``chats``: a chat name, or a mapping
@@ -166,6 +184,7 @@ class SummaryMiddleware(Middleware):
             prompt=config.get('prompt') or "",
             max_chars=int(config.get('max_chars', 40000)),
             timeout=float(config.get('timeout', 180)))
+        self.jev: Optional[Jev] = config['jev']
         self.targets = targets
 
     def reload_config(self):

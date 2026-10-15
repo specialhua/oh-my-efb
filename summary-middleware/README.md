@@ -47,11 +47,34 @@ chats:                 # 群名、备注名或 chat ID，任一匹配即可
 #   ...
 # max_chars: 40000     # 单次请求的聊天记录字符上限，超出则分段总结再合并
 # timeout: 180         # 单次请求超时（秒）
+
+# jev:                 # 可选：TypeSafe 的 Jev 模型，用来给消息分类，见下文“用 Jev 试标消息”
+#   api_key: ts-xxxx
+#   model: jev-latest  # 默认 jev-latest；也可以写 jev-preview 或具体版本
+#   # base_url: https://api.typesafe.ai/v1
+#   # timeout: 60
 ```
 
 每个群必须有 `interval_days`，并且 `lookback_days` 和 `max_messages` 至少有一个（来自默认值或自己的设置都算）。没有配置文件或这些条件不满足时，EFB 会在启动时直接报错退出。
 
 配置文件改动后不用重启：中间件每分钟检查一次文件是否变化，手动触发汇总前也会检查，变了就重新读取，所有配置项（包括增减群）都即时生效。新文件有错误时会发消息告知原因，并继续使用之前的配置。
+
+### 用 Jev 试标消息
+
+配好 `jev` 之后，可以先离线看看 [Jev](https://docs.typesafe.ai/introduction) 给已记录的消息分类分得准不准，再决定是否用于总结。脚本只读数据库，EFB 不用停：
+
+```bash
+~/efb-venv/bin/python -m efb_summary_middleware.jev_trial                       # 列出库里的群
+~/efb-venv/bin/python -m efb_summary_middleware.jev_trial --chat 某个群 --limit 200
+```
+
+每条消息会结合前后的消息判断一个类别（通知、结论、提问、回答、待办、资料、讨论、附和、闲聊、广告、其他）和一个价值分（0 无信息 … 3 关键），最后统计各类数量、可以剔除的比例和花费。常用参数：
+
+- `--lang en`：问题用英文写（消息原文不变），和默认的中文对比效果
+- `--model jev-preview`：换模型版本
+- `--min-confidence 0.6`：多高的把握才算确定，低于它的类别会同时显示第二候选，后面带 `?`
+- `--batch 30 --before 20 --after 5`：每个请求标多少条、前后带多少条做上下文
+- `--out labels.jsonl`：把结果另存一份，方便对比
 
 ## 行为
 
