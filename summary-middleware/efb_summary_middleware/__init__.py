@@ -371,7 +371,8 @@ class SummaryMiddleware(Middleware):
             self.store.add_labels(labels, labeler.jev.model, time.time())
             self.logger.debug("Labeled %s messages of %s", len(labels), target.name)
 
-
+    @staticmethod
+    def command_args(message: Message) -> Optional[str]:
         """Arguments of a ``/summary`` command sent from the master channel,
         ``None`` for any other message."""
         try:
