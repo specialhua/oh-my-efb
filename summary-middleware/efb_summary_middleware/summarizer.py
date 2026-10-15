@@ -44,18 +44,21 @@ class Summarizer:
         self.timeout = timeout
         self.logger = logging.getLogger(__name__)
 
-    def summarize(self, chat_name: str, lines: List[str]) -> str:
-        """Summarize a transcript, splitting it when it exceeds ``max_chars``."""
+    def summarize(self, chat_name: str, lines: List[str], note: str = "") -> str:
+        """Summarize a transcript, splitting it when it exceeds ``max_chars``.
+        ``note`` is added to the system prompt, e.g. to explain marks in the
+        transcript."""
+        prompt = self.prompt + ("\n\n" + note if note else "")
         chunks = self.split(lines)
         parts = []
         for idx, chunk in enumerate(chunks):
             head = "群名：{}".format(chat_name)
             if len(chunks) > 1:
                 head += "（第 {}/{} 段）".format(idx + 1, len(chunks))
-            parts.append(self.complete(self.prompt, head + "\n\n" + "\n".join(chunk)))
+            parts.append(self.complete(prompt, head + "\n\n" + "\n".join(chunk)))
         if len(parts) == 1:
             return parts[0]
-        return self.complete(self.prompt + "\n\n" + MERGE_PROMPT,
+        return self.complete(prompt + "\n\n" + MERGE_PROMPT,
                              "群名：{}\n\n".format(chat_name) + "\n\n---\n\n".join(parts))
 
     def split(self, lines: List[str]) -> List[List[str]]:

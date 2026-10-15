@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from typing import Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple
+from typing import AbstractSet, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
 from .jev import Jev
 
@@ -116,10 +116,11 @@ class Labeler:
             yield first, last, max(0, first - self.context_before), min(len(rows), last + self.context_after)
 
     def label(self, chat_name: str, rows: Sequence[LabelRow], start: int = 0, end: Optional[int] = None,
-              usage: Optional[Dict[str, int]] = None) -> List[Label]:
+              usage: Optional[Dict[str, int]] = None, skip: AbstractSet[int] = frozenset()) -> List[Label]:
         """Label ``rows[start:end]``, using the rows before and after them as
         context. ``rows`` are the messages of one chat in chronological order.
-        Token usage of the requests is added up into ``usage`` if given."""
+        Rows whose message ID is in ``skip`` serve only as context and get no
+        label. Token usage of the requests is added up into ``usage`` if given."""
         end = len(rows) if end is None else end
         labels: List[Label] = []
         for first, last, lo, hi in self.batches(rows, start, end):
@@ -128,7 +129,7 @@ class Labeler:
             messages = [self.message(i - lo + 1, rows[i]) for i in range(lo, hi)]
             questions = {}
             for i in range(first, last):
-                if is_media(rows[i][3]):
+                if rows[i][0] in skip or is_media(rows[i][3]):
                     continue
                 message = messages[i - lo]
                 questions["c{}".format(i)] = {
@@ -149,6 +150,8 @@ class Labeler:
                         if isinstance(count, int):
                             usage[key] = usage.get(key, 0) + count
             for i in range(first, last):
+                if rows[i][0] in skip:
+                    continue
                 if "c{}".format(i) not in answers:
                     labels.append(Label(rows[i][0], MEDIA, 1.0, {MEDIA: 1.0}, 0.0))
                     continue

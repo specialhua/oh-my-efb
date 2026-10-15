@@ -20,7 +20,8 @@ from ehforwarderbot.utils import extra, get_config_path, get_data_path
 
 from . import render
 from .jev import DEFAULT_BASE_URL as JEV_BASE_URL, Jev
-from .store import Store
+from .labeler import MEDIA, TASKS, Labeler
+from .store import LabeledRow, Store
 from .summarizer import Summarizer
 
 __version__ = "0.1.0"
@@ -48,6 +49,21 @@ PLACEHOLDERS = {
     MsgType.Sticker: "[表情]",
     MsgType.Unsupported: "[不支持的消息]",
 }
+
+
+NOISE = {"filler", "ad"}
+"""Categories left out of a summary when Jev is sure enough of them."""
+TAGS = {"arrangement": "安排", "question": "提问", "answer": "回答", "info": "信息"}
+"""Categories marked in the transcript given to the model."""
+DUPLICATE_MIN_CHARS = 15
+"""Repeats of a message at least this long are left out of a summary;
+shorter ones like "1" or "收到" from different people are not repeats."""
+
+LABEL_NOTE = """聊天记录已经过预处理：
+- 行首带 ★ 的是预先判断最值得提到的消息，总结要覆盖到它们的内容（不必逐条罗列）
+- 〔安排〕〔提问〕〔回答〕〔信息〕是消息类别标记，可以借此把问题和回答对应起来
+- 纯附和、闲聊、广告、图片表情占位和重复消息已经省略，开头会注明省略了多少
+这些标记是自动生成的，可能有误，一切以消息原文为准。"""
 
 
 class Target:
@@ -89,6 +105,12 @@ class SummaryMiddleware(Middleware):
     retention_margin_days: float = 7
     """Unless ``retention_days`` is set, messages are kept this long beyond
     the window of their chat."""
+    label_settle_seconds: float = 600
+    """A message is labeled once this old, or once enough messages after it
+    have arrived to serve as its context, whichever comes first."""
+    label_max_per_run: int = 300
+    """Messages of a chat labeled at most in one pass, so a backlog (e.g. on
+    enabling Jev) is worked off over several passes."""
 
     def __init__(self, instance_id: Optional[InstanceID] = None):
         super().__init__(instance_id)
@@ -103,9 +125,12 @@ class SummaryMiddleware(Middleware):
         self.apply_config(config)
 
         self.run_lock = threading.Lock()
+        self.label_lock = threading.Lock()
+        self.label_failing = False
         self.stop_event = threading.Event()
         atexit.register(self.stop_event.set)
         threading.Thread(target=self.schedule_loop, name="summary schedule", daemon=True).start()
+        threading.Thread(target=self.label_loop, name="summary labeling", daemon=True).start()
 
     def load_config(self) -> Dict[str, Any]:
         path = self.config_path
@@ -125,8 +150,9 @@ class SummaryMiddleware(Middleware):
         data["jev"] = self.load_jev(data.get("jev"))
         return data
 
-    def load_jev(self, entry: Any) -> Optional[Jev]:
-        """Build the Jev client from the optional ``jev`` section."""
+    def load_jev(self, entry: Any) -> Optional[Dict[str, Any]]:
+        """Settings of labeling from the optional ``jev`` section: the
+        ``labeler``, and ``min_confidence`` and ``highlight``."""
         if entry is None:
             return None
         if not isinstance(entry, dict):
@@ -135,11 +161,26 @@ class SummaryMiddleware(Middleware):
             value = entry.get(key)
             if (required or value is not None) and (not isinstance(value, str) or not value):
                 raise ValueError("{}: \"jev.{}\" must be a non-empty string.".format(self.middleware_id, key))
-        timeout = entry.get("timeout", 60)
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
-            raise ValueError("{}: \"jev.timeout\" must be a positive number.".format(self.middleware_id))
-        return Jev(api_key=entry["api_key"], model=entry.get("model") or "jev-latest",
-                   base_url=entry.get("base_url") or JEV_BASE_URL, timeout=timeout)
+
+        def number(key: str, default: float, low: float, high: float) -> float:
+            value = entry.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low < value <= high:
+                raise ValueError("{}: \"jev.{}\" must be a number in ({:g}, {:g}].".format(
+                    self.middleware_id, key, low, high))
+            return value
+
+        timeout = number("timeout", 60, 0, float("inf"))
+        min_confidence = number("min_confidence", 0.6, 0, 1)
+        # 0 marks nothing; allowed although it is the open end of the range.
+        highlight = entry.get("highlight", 0.2)
+        if highlight != 0:
+            highlight = number("highlight", 0.2, 0, 1)
+        lang = entry.get("lang", "zh")
+        if lang not in TASKS:
+            raise ValueError("{}: \"jev.lang\" must be one of {}.".format(self.middleware_id, ", ".join(TASKS)))
+        jev = Jev(api_key=entry["api_key"], model=entry.get("model") or "jev-latest",
+                  base_url=entry.get("base_url") or JEV_BASE_URL, timeout=timeout)
+        return {"labeler": Labeler(jev, lang=lang), "min_confidence": min_confidence, "highlight": highlight}
 
     def load_target(self, entry: Any, defaults: Dict[str, Any]) -> Target:
         """Build a target from an item of ``chats``: a chat name, or a mapping
@@ -184,7 +225,10 @@ class SummaryMiddleware(Middleware):
             prompt=config.get('prompt') or "",
             max_chars=int(config.get('max_chars', 40000)),
             timeout=float(config.get('timeout', 180)))
-        self.jev: Optional[Jev] = config['jev']
+        jev = config['jev'] or {}
+        self.labeler: Optional[Labeler] = jev.get("labeler")
+        self.min_confidence: float = jev.get("min_confidence", 0.6)
+        self.highlight: float = jev.get("highlight", 0.2)
         self.targets = targets
 
     def reload_config(self):
@@ -283,8 +327,51 @@ class SummaryMiddleware(Middleware):
                     target.retry_at = time.time() + self.retry_seconds
                 target.failing = not ok
 
-    @staticmethod
-    def command_args(message: Message) -> Optional[str]:
+    def label_loop(self):
+        while not self.stop_event.wait(self.poll_seconds):
+            for target in self.targets:
+                if self.stop_event.is_set():
+                    return
+                try:
+                    self.label_target(target)
+                except Exception as e:
+                    self.logger.exception("Failed to label messages of %s", target.name)
+                    # Report only the first of consecutive failures; summaries
+                    # go on with the messages left unlabeled.
+                    if not self.label_failing:
+                        self.report("⚠️ Jev 给 <b>{}</b> 的消息分类失败，总结会照常进行，只是不做筛选：{}".format(
+                            html.escape(target.name), html.escape(str(e)[:500])))
+                    self.label_failing = True
+                    break
+            else:
+                self.label_failing = False
+
+    def label_target(self, target: Target, final: bool = False):
+        """Label the messages of a chat that have settled, see
+        :attr:`label_settle_seconds`; with ``final``, all of them."""
+        labeler = self.labeler
+        if labeler is None:
+            return
+        with self.label_lock:
+            pending = self.store.for_labeling(target.name, labeler.context_before, self.label_max_per_run,
+                                              labeler.context_after)
+            if pending is None:
+                return
+            rows, start, labeled = pending
+            end = min(len(rows), start + self.label_max_per_run)
+            if not final:
+                now = time.time()
+                while end > start and len(rows) - end < labeler.context_after \
+                        and now - rows[end - 1][1] < self.label_settle_seconds:
+                    end -= 1
+            if all(rows[i][0] in labeled for i in range(start, end)):
+                return
+            chat_name = self.store.chat_info(target.name)[0] or target.name
+            labels = labeler.label(chat_name, rows, start, end, skip=labeled)
+            self.store.add_labels(labels, labeler.jev.model, time.time())
+            self.logger.debug("Labeled %s messages of %s", len(labels), target.name)
+
+
         """Arguments of a ``/summary`` command sent from the master channel,
         ``None`` for any other message."""
         try:
@@ -380,7 +467,12 @@ class SummaryMiddleware(Middleware):
                   lookback_days: Optional[float], max_messages: Optional[int]):
         now = time.time()
         since = now - lookback_days * DAY if lookback_days is not None else None
-        rows = self.store.fetch(target.name, since, max_messages)
+        if self.labeler is not None:
+            try:  # include the latest messages; on failure they stay unlabeled
+                self.label_target(target, final=True)
+            except Exception:
+                self.logger.exception("Failed to label messages of %s before summarizing", target.name)
+        rows = self.store.fetch_labeled(target.name, since, max_messages)
         chat_name = self.store.chat_info(target.name)[0] or target.name
         title = "{} 群聊总结".format(chat_name)
         if not rows:
@@ -389,14 +481,21 @@ class SummaryMiddleware(Middleware):
                 "还" if lookback_days is None else "最近 {:g} 天".format(lookback_days)), destination)
             return
 
-        lines = ["[{}] {}: {}".format(datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"), author, content)
-                 for ts, author, content in rows]
-        summary = self.summarizer.summarize(chat_name, lines)
-
-        meta = "{} ~ {} · {} 条消息 · {} 人发言".format(
+        lines, omitted = self.transcript(rows)
+        meta = "{} ~ {} · {} 条消息{} · {} 人发言".format(
             datetime.fromtimestamp(rows[0][0]).strftime("%m-%d %H:%M"),
             datetime.fromtimestamp(rows[-1][0]).strftime("%m-%d %H:%M"),
-            len(rows), len({author for _, author, _ in rows}))
+            len(rows), "（筛掉 {}）".format(sum(omitted.values())) if omitted else "",
+            len({row[1] for row in rows}))
+        if not lines:
+            self.send_text("📋 <b>{}</b>\n{}\n\n全是附和、闲聊、图片表情之类，没有需要总结的内容。".format(
+                html.escape(title), html.escape(meta)), destination)
+            return
+        if omitted:
+            lines.insert(0, "（已省略：{}）".format("，".join(
+                "{} {} 条".format(kind, count) for kind, count in omitted.items())))
+        summary = self.summarizer.summarize(chat_name, lines, LABEL_NOTE if self.labeler is not None else "")
+
         header = "📋 <b>{}</b>\n{}\n\n".format(html.escape(title), html.escape(meta))
         text, truncated = render.telegram_message(header, summary, "<i>内容较长，完整版见附件。</i>")
         self.send_text(text, destination)
@@ -407,6 +506,38 @@ class SummaryMiddleware(Middleware):
             chat_id, thread_id = destination
             coordinator.master.bot_manager.send_document(  # type: ignore[attr-defined]
                 chat_id, page, filename=filename, **self.thread_kwargs(thread_id))
+
+    def transcript(self, rows: List[LabeledRow]) -> Tuple[List[str], Dict[str, int]]:
+        """Lines of the transcript given to the model, and how many messages
+        were left out of it by kind. Without labels it is the plain log."""
+        omitted: Dict[str, int] = {}
+        kept: List[LabeledRow] = []
+        seen = set()
+        for row in rows:
+            _, _, content, category, confidence, _ = row
+            kind = None
+            if category == MEDIA:
+                kind = "图片表情等"
+            elif category in NOISE and confidence >= self.min_confidence:
+                kind = "附和闲聊广告"
+            elif len(content) >= DUPLICATE_MIN_CHARS and content in seen:
+                kind = "重复"
+            if kind:
+                omitted[kind] = omitted.get(kind, 0) + 1
+                continue
+            seen.add(content)
+            kept.append(row)
+        # Ranked within the window, as how much a chat has worth mentioning varies.
+        mentions = sorted((row[5] for row in kept if row[5] is not None), reverse=True)
+        cut = mentions[max(0, round(len(mentions) * self.highlight) - 1)] \
+            if mentions and self.highlight > 0 else float("inf")
+        lines = []
+        for ts, author, content, category, _, mention in kept:
+            tag = "〔{}〕".format(TAGS[category]) if category in TAGS else ""
+            lines.append("{}[{}] {}: {}{}".format("★ " if mention is not None and mention >= cut else "",
+                                                  datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"),
+                                                  author, tag, content))
+        return lines, omitted
 
     # endregion
     # region Telegram
