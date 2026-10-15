@@ -22,15 +22,16 @@ from ruamel.yaml import YAML
 from ehforwarderbot.utils import get_base_path
 
 from .jev import DEFAULT_BASE_URL, Jev
-from .labeler import CATEGORIES, Label, Labeler, LabelRow
+from .labeler import CATEGORIES, MEDIA, Label, Labeler, LabelRow
 
 MODULE_ID = "specialhua.summary"
 PRICE_PER_MTOK = 0.042
 """US dollars per million input tokens; output tokens are free."""
-NOISE = {"ack", "chitchat", "ad"}
+NOISE = {"filler", "ad"}
 """Categories a summary could leave out."""
 
 NAMES = {key: text.split("：", 1)[0] for key, text in CATEGORIES["zh"].items()}
+NAMES[MEDIA] = "媒体"
 
 
 def main():
@@ -45,7 +46,9 @@ def main():
     parser.add_argument("--before", type=int, default=20, help="messages of context before a batch (default: 20)")
     parser.add_argument("--after", type=int, default=5, help="messages of context after a batch (default: 5)")
     parser.add_argument("--min-confidence", type=float, default=0.6,
-                        help="confidence needed to count a label as sure (default: 0.6)")
+                        help="confidence needed to count a category as sure (default: 0.6)")
+    parser.add_argument("--highlight", type=float, default=0.2,
+                        help="share of the kept messages most worth mentioning to mark with ★ (default: 0.2)")
     parser.add_argument("--out", help="also write the labels to this file, one JSON object per line")
     args = parser.parse_args()
 
@@ -84,40 +87,46 @@ def main():
 
     out = open(args.out, "w", encoding="utf-8") if args.out else None
     sure = args.min_confidence
-    dropped = 0
+    kept = sorted((i.mention for i in labels if not is_noise(i, sure)), reverse=True)
+    # Ranked within the chat, as how much a chat has worth mentioning varies.
+    cut = kept[max(0, round(len(kept) * args.highlight) - 1)] if kept and args.highlight > 0 else 2.0
     for row, label in zip(rows[start:], labels):
         drop = is_noise(label, sure)
-        dropped += drop
-        print_label(row, label, sure, drop)
+        star = not drop and label.mention >= cut
+        print_label(row, label, sure, "  ✂" if drop else "  ★" if star else "")
         if out:
             out.write(json.dumps(dict(label._asdict(), author=row[2], content=row[3], ts=row[1],
-                                      dropped=drop), ensure_ascii=False) + "\n")
+                                      dropped=drop, highlighted=star), ensure_ascii=False) + "\n")
     if out:
         out.close()
 
     print("\n==== {} · {} 条 · model {} · lang {} ====".format(chat_name, len(labels), jev.model, args.lang))
     counts = Counter(i.category for i in labels)
-    for key in CATEGORIES["zh"]:
+    for key in list(CATEGORIES["zh"]) + [MEDIA]:
         if counts[key]:
             unsure = sum(1 for i in labels if i.category == key and i.category_confidence < sure)
             print("  {:<6} {:>4}  ({} 条把握不足)".format(NAMES[key], counts[key], unsure))
-    print("价值平均 {:.2f}，≥2（有用以上）{} 条".format(
-        sum(i.value for i in labels) / len(labels), sum(1 for i in labels if i.value >= 2)))
-    print("可以剔除（附和/闲聊/广告或价值<0.5，且把握 ≥ {}）：{} 条，占 {:.0%}".format(
+    dropped = len(labels) - len(kept)
+    print("可以剔除（媒体，或附和/闲聊/广告且把握 ≥ {}）：{} 条，占 {:.0%}".format(
         sure, dropped, dropped / len(labels)))
-    requests_made = len(list(labeler.batches(rows, start, len(rows))))
+    bands = [0, 0.2, 0.4, 0.6, 0.8, 1.01]
+    print("其余 {} 条“值得提”的分布：{}".format(len(kept), "  ".join(
+        "{:.1f}–{:.1f} {}".format(lo, min(hi, 1), sum(1 for i in kept if lo <= i < hi))
+        for lo, hi in zip(bands, bands[1:]))))
+    if kept and args.highlight > 0:
+        print("★ 前 {:.0%}：值得提 ≥ {:.2f} 的 {} 条".format(args.highlight, cut, sum(1 for i in kept if i >= cut)))
+    asked = sum(1 for i in labels if i.category != MEDIA)
     tokens = usage.get("input_tokens", 0)
-    print("{} 个请求，耗时 {:.1f} 秒；输入 {} token，约 ${:.5f}；平均每条消息 {:.0f} token".format(
-        requests_made, elapsed, tokens, tokens * PRICE_PER_MTOK / 1e6, tokens / len(labels)))
+    print("{} 个请求，耗时 {:.1f} 秒；输入 {} token，约 ${:.5f}；平均每条问过 Jev 的消息 {:.0f} token".format(
+        len(list(labeler.batches(rows, start, len(rows)))), elapsed, tokens,
+        tokens * PRICE_PER_MTOK / 1e6, tokens / max(asked, 1)))
 
 
 def is_noise(label: Label, sure: float) -> bool:
-    if label.category in NOISE and label.category_confidence >= sure:
-        return True
-    return label.value < 0.5 and label.value_confidence >= sure
+    return label.category == MEDIA or label.category in NOISE and label.category_confidence >= sure
 
 
-def print_label(row: LabelRow, label: Label, sure: float, drop: bool):
+def print_label(row: LabelRow, label: Label, sure: float, mark: str):
     _, ts, author, content = row
     text = content.replace("\n", " ")
     if len(text) > 80:
@@ -127,8 +136,7 @@ def print_label(row: LabelRow, label: Label, sure: float, drop: bool):
     category = "{} {:.2f}".format(NAMES.get(ranked[0][0], ranked[0][0]), ranked[0][1])
     if label.category_confidence < sure and len(ranked) > 1:
         category += " / {} {:.2f} ?".format(NAMES.get(ranked[1][0], ranked[1][0]), ranked[1][1])
-    print("    {}  · 价值 {:.1f} (把握 {:.2f}){}".format(
-        category, label.value, label.value_confidence, "  ✂" if drop else ""))
+    print("    {}  · 值得提 {:.2f}{}".format(category, label.mention, mark))
 
 
 if __name__ == "__main__":
