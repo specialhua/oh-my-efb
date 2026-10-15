@@ -1,9 +1,10 @@
 # coding=utf-8
 
+import json
 import logging
 import re
 import time
-from typing import List
+from typing import List, Tuple
 
 import requests
 
@@ -74,16 +75,13 @@ class Summarizer:
             if attempt:
                 time.sleep(self.retry_wait)
             try:
-                resp = requests.post(
-                    self.url,
-                    headers={"Authorization": "Bearer " + self.api_key},
-                    json={"model": self.model, "temperature": 0.3,
-                          "messages": [{"role": "system", "content": system},
-                                       {"role": "user", "content": user}]},
-                    timeout=self.timeout)
-                if resp.status_code >= 400:
-                    raise RuntimeError("HTTP {}: {}".format(resp.status_code, resp.text[:300]))
-                text = resp.json()["choices"][0]["message"]["content"]
+                self.logger.info("Completion attempt %s: %s chars", attempt + 1, len(system) + len(user))
+                status, body = self.post({"model": self.model, "temperature": 0.3,
+                                          "messages": [{"role": "system", "content": system},
+                                                       {"role": "user", "content": user}]})
+                if status >= 400:
+                    raise RuntimeError("HTTP {}: {}".format(status, body[:300].decode("utf-8", "replace")))
+                text = json.loads(body)["choices"][0]["message"]["content"]
                 # Some relays leak the reasoning of thinking models into the content.
                 text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
                 if not text:
@@ -93,3 +91,18 @@ class Summarizer:
                 error = e
                 self.logger.warning("Completion attempt %s failed: %s", attempt + 1, e)
         raise error
+
+    def post(self, payload: dict) -> Tuple[int, bytes]:
+        """POST to the endpoint and read the whole response within ``timeout``
+        seconds. The timeout of requests only bounds each read, so a relay
+        that keeps sending chunks (e.g. keep-alive padding) would otherwise
+        hold the request open indefinitely."""
+        deadline = time.monotonic() + self.timeout
+        with requests.post(self.url, headers={"Authorization": "Bearer " + self.api_key},
+                           json=payload, timeout=self.timeout, stream=True) as resp:
+            body = bytearray()
+            for chunk in resp.iter_content(8192):
+                body += chunk
+                if time.monotonic() > deadline:
+                    raise TimeoutError("no complete response in {:g} s".format(self.timeout))
+            return resp.status_code, bytes(body)
