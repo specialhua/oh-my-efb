@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from . import store
 
@@ -55,6 +55,10 @@ def telegram_link(master_msg_id: str) -> Optional[str]:
     return None
 
 
+def tg_chat(master_msg_id: Optional[str]) -> str:
+    return (master_msg_id or "").partition(".")[0]
+
+
 class Archive:
     names_seconds = 30
 
@@ -64,6 +68,8 @@ class Archive:
         self.names_lock = threading.Lock()
         self.names: Dict[str, Tuple[str, Optional[str], Optional[str]]] = {}
         self.names_at = 0.0
+        self.topic_chats: Set[str] = set()
+        """Telegram forum groups where slave chats have topics."""
 
     @property
     def db(self) -> sqlite3.Connection:
@@ -84,7 +90,19 @@ class Archive:
                 return
             self.names = {row[0]: (row[1], row[2], row[3]) for row in
                           self.db.execute("SELECT key, name, alias, chat_type FROM names")}
+            row = self.db.execute("SELECT value FROM meta WHERE key = 'topic_chats'").fetchone()
+            self.topic_chats = set(json.loads(row[0])) if row else set()
             self.names_at = time.time()
+
+    def place(self, telegram_chat: str) -> Optional[str]:
+        """Where in Telegram a message was: the private chat with the bot, a
+        topic of a forum group, or a group linked to the chat. Only where it
+        was delivered: it does not tell a group chat from a private one."""
+        if not telegram_chat:
+            return None
+        if not telegram_chat.startswith("-"):
+            return "bot"
+        return "topic" if telegram_chat in self.topic_chats else "group"
 
     def chat_name(self, key: str) -> Tuple[str, Optional[str]]:
         """Display name of a chat, and its own name if the display name is an alias."""
@@ -139,11 +157,15 @@ class Archive:
     def chats(self) -> List[Dict[str, Any]]:
         self.load_names()
         result = []
-        for key, count, first_ts, last_ts, senders in self.db.execute(
-                "SELECT key, count, first_ts, last_ts, senders FROM chats ORDER BY last_ts DESC"):
+        for key, count, first_ts, last_ts, hint, last_tg in self.db.execute(
+                "SELECT key, count, first_ts, last_ts, hint, last_tg FROM chats ORDER BY last_ts DESC"):
             name, original = self.chat_name(key)
-            chat_type = (self.names.get(key) or (None, None, None))[2] or ("Group" if senders > 2 else "Private")
+            # The type the channels gave the chat; failing that, what its
+            # senders show (see store.sender_hint), or unknown.
+            chat_type = (self.names.get(key) or (None, None, None))[2] or \
+                {store.HINT_GROUP: "Group", store.HINT_PRIVATE: "Private"}.get(hint)
             result.append({"key": key, "name": name, "original": original, "type": chat_type,
+                           "place": self.place(last_tg or ""),
                            "count": count, "first_ts": first_ts, "last_ts": last_ts})
         return result
 
@@ -283,6 +305,7 @@ class Archive:
                 "sender": self.sender_name(row["sender_key"], bool(row["outgoing"])),
                 "media": bool(row["has_file"]), "mime": row["mime"],
                 "tg": telegram_link(row["master_msg_id"]),
+                "place": self.place(tg_chat(row["master_msg_id"])),
             }
             if extra.get("system"):
                 item["system"] = True

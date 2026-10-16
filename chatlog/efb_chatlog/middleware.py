@@ -46,8 +46,15 @@ class ChatlogMiddleware(Middleware):
         chat = message.chat
         if chat is None:
             return
-        chat_type = "Group" if isinstance(chat, GroupChat) else "Private" if isinstance(chat, PrivateChat) \
-            else "System"
+        if isinstance(chat, GroupChat):
+            chat_type = "Group"
+        elif isinstance(chat, PrivateChat):
+            # The WeChat slave channel marks official accounts, and also the
+            # chat with oneself, which is not one.
+            is_mp = (chat.vendor_specific or {}).get("is_mp") and not isinstance(chat.other, SelfChatMember)
+            chat_type = "MP" if is_mp else "Private"
+        else:
+            chat_type = "System"
         rows: List[Tuple[str, str, Optional[str], Optional[str]]] = [
             ("{} {}".format(chat.module_id, chat.uid), chat.name, chat.alias, chat_type)]
         author = message.author
