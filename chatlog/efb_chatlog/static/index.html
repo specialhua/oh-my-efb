@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="robots" content="noindex, nofollow">
+<title>聊天记录</title>
+<style nonce="__NONCE__">
+:root {
+  --bg: #f4f6f9; --panel: #ffffff; --card: #f8fafc; --card-hover: #eef2f7;
+  --border: #dde3ea; --border-strong: #c5cfda;
+  --text: #17202b; --muted: #5d6b7c; --faint: #8a96a5;
+  --accent: #0f8f80; --accent-soft: rgba(15, 143, 128, .12); --accent-text: #0b7064;
+  --out: rgba(15, 143, 128, .07); --mark: rgba(245, 180, 0, .38); --danger: #c23b3b;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05);
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1520; --panel: #141d2a; --card: #18222f; --card-hover: #1d2938;
+    --border: #253244; --border-strong: #33445a;
+    --text: #e6ecf3; --muted: #93a1b3; --faint: #6c7a8c;
+    --accent: #5fd4c0; --accent-soft: rgba(95, 212, 192, .13); --accent-text: #7fe3d2;
+    --out: rgba(95, 212, 192, .06); --mark: rgba(245, 190, 40, .35); --danger: #f07474;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent-text); }
+
+.btn {
+  border: 1px solid var(--border-strong); background: var(--card); border-radius: 10px;
+  padding: 7px 14px; font-weight: 600; white-space: nowrap;
+}
+.btn:hover { background: var(--card-hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .btn.primary { color: #08201c; } }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.small { padding: 3px 10px; font-size: 12px; border-radius: 8px; font-weight: 500; }
+.btn.danger { color: var(--danger); }
+.btn:disabled { opacity: .55; cursor: default; }
+.field {
+  width: 100%; border: 1px solid var(--border); background: var(--card); border-radius: 10px;
+  padding: 8px 12px; outline: none;
+}
+.field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+select.field { width: auto; padding-right: 28px; }
+
+/* Sign-in */
+.auth { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; }
+.auth-card {
+  width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 18px; padding: 32px 28px; box-shadow: var(--shadow); text-align: center;
+}
+.auth-card h1 { margin: 0 0 6px; font-size: 24px; }
+.auth-card p { margin: 0 0 22px; color: var(--muted); }
+.auth-card .btn { width: 100%; padding: 11px; margin-top: 10px; }
+.auth-card .field { margin-top: 4px; text-align: center; }
+.auth-msg { margin-top: 16px !important; margin-bottom: 0 !important; font-size: 13px; min-height: 1.5em; }
+.auth-msg.error { color: var(--danger); }
+.lock { font-size: 34px; margin-bottom: 8px; }
+
+/* App */
+.app { max-width: 1440px; margin: 0 auto; padding: 22px 24px; height: 100%; display: flex; flex-direction: column; gap: 16px; }
+.top { display: flex; align-items: flex-end; gap: 16px; }
+.top h1 { margin: 0; font-size: 26px; letter-spacing: .5px; }
+.top .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.top .grow { flex: 1; }
+.top .global { width: 340px; }
+
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); min-width: 0; }
+.stat .k { font-size: 12px; color: var(--muted); font-weight: 600; }
+.stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.stat .v.ok { color: var(--accent-text); }
+.stat .d { font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.main { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px 1fr; gap: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; min-width: 0; box-shadow: var(--shadow); }
+.panel-head { padding: 14px 16px 10px; display: flex; align-items: center; gap: 10px; }
+.panel-head h2 { margin: 0; font-size: 16px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-head .count { color: var(--faint); font-size: 12px; }
+
+.chat-tools { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 8px; }
+.seg { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+.seg button { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 4px 0; color: var(--muted); font-size: 13px; }
+.seg button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+.chat-list { overflow-y: auto; padding: 2px 10px 12px; flex: 1; }
+.chat {
+  display: block; width: 100%; text-align: left; border: 1px solid transparent; background: var(--card);
+  border-radius: 11px; padding: 9px 12px; margin-bottom: 6px;
+}
+.chat:hover { background: var(--card-hover); }
+.chat.on { border-color: var(--accent); background: var(--accent-soft); }
+.chat .n { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat .m { font-size: 12px; color: var(--faint); display: flex; gap: 6px; }
+.chat .m .t { margin-left: auto; }
+
+.msg-head { border-bottom: 1px solid var(--border); padding-bottom: 12px; flex-wrap: wrap; }
+.msg-head .title { flex: 1; min-width: 160px; }
+.msg-head .title h2 { flex: none; }
+.msg-head .title .m { font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-head .in-chat { width: 220px; }
+.back { display: none; }
+.msg-list { flex: 1; overflow-y: auto; padding: 12px 16px 16px; overscroll-behavior: contain; }
+.empty { color: var(--faint); text-align: center; padding: 48px 12px; }
+.loader { color: var(--faint); text-align: center; font-size: 12px; padding: 8px; }
+.day { text-align: center; margin: 14px 0 8px; }
+.day span { font-size: 12px; color: var(--muted); background: var(--card); border: 1px solid var(--border); padding: 2px 10px; border-radius: 99px; }
+
+.msg { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 9px 13px 10px; margin-bottom: 8px; }
+.msg.out { background: var(--out); border-color: var(--accent-soft); }
+.msg.target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.msg.system { background: transparent; border-style: dashed; color: var(--muted); }
+.msg-top { display: flex; gap: 10px; align-items: baseline; }
+.msg-top .who { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg.out .who { color: var(--accent-text); }
+.msg-top .where { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-top .meta { margin-left: auto; font-size: 12px; color: var(--faint); white-space: nowrap; }
+.msg-top .meta a { color: var(--faint); text-decoration: none; margin-left: 6px; border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; }
+.msg-top .meta a:hover { color: var(--accent-text); border-color: var(--accent); }
+img.broken { display: none; }
+.media .gone { color: var(--faint); font-size: 13px; font-style: italic; }
+.msg-body { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
+.msg mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1px; }
+.placeholder { color: var(--faint); font-style: italic; }
+.reply { border-left: 3px solid var(--border-strong); padding: 2px 0 2px 9px; margin: 4px 0; color: var(--muted); font-size: 13px; cursor: pointer; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.reply b { color: var(--text); font-weight: 600; }
+.media { margin-top: 6px; }
+.media img, .media video { max-width: min(100%, 360px); max-height: 320px; border-radius: 10px; display: block; background: var(--card-hover); }
+.media img.sticker { max-width: 160px; max-height: 160px; background: transparent; }
+.media audio { width: min(100%, 320px); }
+.link-card { display: flex; gap: 10px; margin-top: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; text-decoration: none; color: inherit; background: var(--panel); max-width: 520px; }
+.link-card:hover { border-color: var(--border-strong); }
+.link-card img { width: 56px; height: 56px; object-fit: cover; border-radius: 7px; flex: none; }
+.link-card .lt { font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.link-card .ld { font-size: 12px; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.actions { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+.actions a.btn { text-decoration: none; color: inherit; }
+
+dialog { border: 1px solid var(--border); border-radius: 16px; background: var(--panel); color: var(--text); padding: 0; width: min(520px, calc(100% - 32px)); }
+dialog::backdrop { background: rgba(5, 10, 18, .55); }
+.dlg-head { display: flex; align-items: center; padding: 16px 18px 6px; }
+.dlg-head h2 { margin: 0; font-size: 17px; flex: 1; }
+.dlg-body { padding: 6px 18px 18px; }
+.dlg-body p { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+.device { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--card); border-radius: 11px; padding: 10px 12px; margin-bottom: 8px; }
+.device .info { flex: 1; min-width: 0; }
+.device .n { font-weight: 600; }
+.device .m { font-size: 12px; color: var(--faint); }
+.tag { font-size: 11px; color: var(--accent-text); background: var(--accent-soft); border-radius: 99px; padding: 1px 7px; margin-left: 6px; font-weight: 600; }
+.dlg-foot { display: flex; gap: 8px; justify-content: flex-end; padding-top: 6px; }
+
+@media (max-width: 1100px) {
+  .stats { grid-template-columns: repeat(3, 1fr); }
+  .stats .stat:nth-child(n+4) { display: none; }
+  .top .global { width: 260px; }
+}
+@media (max-width: 820px) {
+  .app { padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); gap: 12px; }
+  .top { flex-wrap: wrap; align-items: center; }
+  .top h1 { font-size: 22px; }
+  .top .sub { display: none; }
+  .top .global { order: 5; width: 100%; }
+  .stats { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat { padding: 9px 10px; }
+  .stat .v { font-size: 16px; }
+  .stat .d { display: none; }
+  .main { grid-template-columns: 1fr; }
+  .app.viewing .stats, .app.viewing .top, .app.viewing #chats-panel { display: none; }
+  .app:not(.viewing) #messages-panel { display: none; }
+  .back { display: inline-block; }
+  .msg-head .title { flex: 1 1 calc(100% - 96px); }
+  .msg-head #types { order: 4; }
+  .msg-head .in-chat { width: auto; flex: 1; order: 5; min-width: 0; }
+  .msg-list { padding: 10px 10px 14px; }
+}
+</style>
+</head>
+<body>
+
+<div class="auth" id="auth" hidden>
+  <div class="auth-card">
+    <div class="lock" aria-hidden="true">🔐</div>
+    <h1>聊天记录</h1>
+    <div id="signin">
+      <p>只有登记过的设备能打开，用指纹或面容验证。</p>
+      <button class="btn primary" id="login">使用通行密钥登录</button>
+      <button class="btn" id="request">登记这台设备</button>
+    </div>
+    <div id="enroll" hidden>
+      <p>给这台设备起个名字，然后用指纹或面容创建通行密钥。</p>
+      <input class="field" id="device-name" maxlength="40" placeholder="设备名称">
+      <button class="btn primary" id="enroll-go">创建通行密钥</button>
+      <button class="btn" id="enroll-cancel">取消</button>
+    </div>
+    <p class="auth-msg" id="auth-msg" role="status"></p>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
+  <div class="top">
+    <div>
+      <h1>聊天记录</h1>
+      <div class="sub">EFB 转发过的微信消息，包括你从 Telegram 发出的</div>
+    </div>
+    <div class="grow"></div>
+    <input class="field global" id="global-q" type="search" placeholder="搜索全部聊天  from:名字 可按人筛选" enterkeyhint="search">
+    <button class="btn" id="open-devices">设备</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">消息</div><div class="v" id="s-messages">–</div><div class="d" id="s-range">&nbsp;</div></div>
+    <div class="stat"><div class="k">会话</div><div class="v" id="s-chats">–</div><div class="d">微信好友、群和公众号</div></div>
+    <div class="stat"><div class="k">EFB</div><div class="v" id="s-efb">–</div><div class="d" id="s-efb-d">&nbsp;</div></div>
+    <div class="stat"><div class="k">同步</div><div class="v" id="s-sync">–</div><div class="d">从 tgdata.db 增量同步</div></div>
+    <div class="stat"><div class="k">受信设备</div><div class="v" id="s-devices">–</div><div class="d">通行密钥</div></div>
+  </div>
+
+  <div class="main">
+    <section class="panel" id="chats-panel">
+      <div class="panel-head"><h2>会话</h2><span class="count" id="chat-count"></span></div>
+      <div class="chat-tools">
+        <input class="field" id="chat-q" type="search" placeholder="搜索会话">
+        <div class="seg" id="chat-kind">
+          <button data-kind="" class="on">全部</button>
+          <button data-kind="Group">群聊</button>
+          <button data-kind="Private">私聊</button>
+        </div>
+      </div>
+      <div class="chat-list" id="chat-list"></div>
+    </section>
+
+    <section class="panel" id="messages-panel">
+      <div class="panel-head msg-head">
+        <button class="btn small back" id="back">‹ 返回</button>
+        <div class="title"><h2 id="view-title">选择一个会话</h2><div class="m" id="view-meta">&nbsp;</div></div>
+        <select class="field" id="types">
+          <option value="">全部类型</option>
+          <option value="text">文字</option>
+          <option value="link">链接</option>
+          <option value="image">图片</option>
+          <option value="video">视频 / 动图</option>
+          <option value="file">文件</option>
+          <option value="voice">语音</option>
+          <option value="sticker">表情</option>
+          <option value="other">其他</option>
+        </select>
+        <input class="field in-chat" id="chat-search" type="search" placeholder="在此会话中搜索" enterkeyhint="search">
+      </div>
+      <div class="msg-list" id="msg-list"><div class="empty">从左边选一个会话，或在上方搜索全部聊天。</div></div>
+    </section>
+  </div>
+</div>
+
+<dialog id="devices">
+  <div class="dlg-head"><h2>受信设备</h2><button class="btn small" id="close-devices">关闭</button></div>
+  <div class="dlg-body">
+    <p>每台设备一个通行密钥。苹果设备的通行密钥会经 iCloud 钥匙串同步，同一 Apple ID 的设备通常共用一个。移除后，用它登录的会话立即失效。</p>
+    <div id="device-list"></div>
+    <div class="dlg-foot"><button class="btn" id="logout">退出登录</button></div>
+  </div>
+</dialog>
+
+<script nonce="__NONCE__">
+"use strict";
+const $ = (id) => document.getElementById(id);
+const TYPE_LABEL = { Text: "文字", Link: "链接", Image: "图片", Video: "视频", Animation: "动图", File: "文件",
+  Voice: "语音", Sticker: "表情", Location: "位置", Unsupported: "不支持", Status: "状态" };
+const KIND_LABEL = { Group: "群聊", Private: "私聊", System: "系统" };
+
+// region Utilities
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmtNum(n) { return Number(n || 0).toLocaleString("zh-CN"); }
+function pad(n) { return String(n).padStart(2, "0"); }
+function fmtTime(ts, full) {
+  const d = new Date(ts * 1000), now = new Date();
+  const hm = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  if (!full && d.toDateString() === now.toDateString()) return hm;
+  if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + hm;
+  return d.getFullYear() + "/" + (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
+}
+function fmtDay(ts) {
+  const d = new Date(ts * 1000);
+  return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + "周" + "日一二三四五六"[d.getDay()];
+}
+function fmtAgo(ts) {
+  if (!ts) return "–";
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  if (s < 86400 * 30) return Math.floor(s / 86400) + " 天前";
+  return fmtTime(ts, true);
+}
+function b64urlToBuf(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(s + "===".slice((s.length + 3) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
+}
+function bufToB64url(buf) {
+  let bin = "";
+  for (const b of new Uint8Array(buf)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+class ApiError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+async function api(path, options = {}) {
+  const init = { method: options.method || "GET", headers: {}, credentials: "same-origin" };
+  if (options.body !== undefined) {
+    init.method = options.method || "POST";
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(options.body);
+  }
+  let res;
+  try { res = await fetch(path, init); } catch (e) { throw new ApiError(0, "网络错误，请检查连接。"); }
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* not JSON */ }
+  if (!res.ok) {
+    if (res.status === 401 && !options.quiet) showAuth();
+    throw new ApiError(res.status, (data && (data.error || data.detail)) || "请求失败（" + res.status + "）");
+  }
+  return data;
+}
+
+// endregion
+// region Passkeys
+
+function credentialJSON(cred) {
+  if (typeof cred.toJSON === "function") {
+    try { return cred.toJSON(); } catch (e) { /* fall through */ }
+  }
+  const r = cred.response, out = {
+    id: cred.id, rawId: bufToB64url(cred.rawId), type: cred.type,
+    authenticatorAttachment: cred.authenticatorAttachment || undefined,
+    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+    response: { clientDataJSON: bufToB64url(r.clientDataJSON) },
+  };
+  if (r.attestationObject) {
+    out.response.attestationObject = bufToB64url(r.attestationObject);
+    if (r.getTransports) out.response.transports = r.getTransports();
+  } else {
+    out.response.authenticatorData = bufToB64url(r.authenticatorData);
+    out.response.signature = bufToB64url(r.signature);
+    if (r.userHandle) out.response.userHandle = bufToB64url(r.userHandle);
+  }
+  return out;
+}
+function creationOptions(o) {
+  return Object.assign({}, o, {
+    challenge: b64urlToBuf(o.challenge),
+    user: Object.assign({}, o.user, { id: b64urlToBuf(o.user.id) }),
+    excludeCredentials: (o.excludeCredentials || []).map((c) => Object.assign({}, c, { id: b64urlToBuf(c.id) })),
+  });
+}
+function requestOptions(o) {
+  return Object.assign({}, o, {
+    challenge: b64urlToBuf(o.challenge),
+    allowCredentials: (o.allowCredentials || []).map((c) => Object.assign({}, c, { id: b64urlToBuf(c.id) })),
+  });
+}
+function passkeyError(e) {
+  if (e && e.name === "NotAllowedError") return "已取消，或验证超时。";
+  if (e && e.name === "InvalidStateError") return "这台设备已经登记过了，直接登录即可。";
+  if (e && e.name === "SecurityError") return "当前地址不能使用通行密钥，请用配置的域名通过 HTTPS 打开。";
+  return (e && e.message) || "出错了。";
+}
+
+let enrollToken = null;
+
+function authMsg(text, error) {
+  const el = $("auth-msg");
+  el.textContent = text || "";
+  el.classList.toggle("error", !!error);
+}
+function showAuth() {
+  $("app").hidden = true;
+  $("auth").hidden = false;
+  $("signin").hidden = !!enrollToken;
+  $("enroll").hidden = !enrollToken;
+  if (enrollToken && !$("device-name").value) $("device-name").value = guessDevice();
+}
+function guessDevice() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "iPad";
+  if (/Macintosh/.test(ua)) return "Mac";
+  if (/Android/.test(ua)) return "Android";
+  if (/Windows/.test(ua)) return "Windows";
+  return "";
+}
+async function withBusy(button, fn) {
+  button.disabled = true;
+  try { await fn(); } finally { button.disabled = false; }
+}
+
+$("login").onclick = () => withBusy($("login"), async () => {
+  authMsg("");
+  try {
+    const { challenge, options } = await api("/api/login/options", { body: {}, quiet: true });
+    const cred = await navigator.credentials.get({ publicKey: requestOptions(options) });
+    await api("/api/login", { body: { challenge, credential: credentialJSON(cred) }, quiet: true });
+    startApp();
+  } catch (e) { authMsg(passkeyError(e), true); }
+});
+$("request").onclick = () => withBusy($("request"), async () => {
+  authMsg("");
+  try {
+    await api("/api/enroll/request", { body: {}, quiet: true });
+    authMsg("登记链接已由 bot 发到你的 Telegram。在这台设备上打开那条链接，10 分钟内有效。");
+  } catch (e) { authMsg(e.message, true); }
+});
+$("enroll-go").onclick = () => withBusy($("enroll-go"), async () => {
+  authMsg("");
+  try {
+    const { challenge, options } = await api("/api/enroll/options", { body: { token: enrollToken }, quiet: true });
+    const cred = await navigator.credentials.create({ publicKey: creationOptions(options) });
+    await api("/api/enroll", { body: { token: enrollToken, challenge, credential: credentialJSON(cred),
+      name: $("device-name").value.trim() }, quiet: true });
+    enrollToken = null;
+    startApp();
+  } catch (e) { authMsg(passkeyError(e), true); }
+});
+$("enroll-cancel").onclick = () => { enrollToken = null; authMsg(""); showAuth(); };
+
+// endregion
+// region App state
+
+const state = {
+  chats: [], chatMap: new Map(), kind: "", chat: null,
+  mode: "idle",         // "chat": a chat in order; "search": results newest first
+  query: null,          // {q, sender, chat}
+  types: "",
+  first: null, last: null, moreBefore: false, moreAfter: false, next: null,
+  loading: false, token: 0, target: null,
+};
+
+async function startApp() {
+  $("auth").hidden = true;
+  $("app").hidden = false;
+  await Promise.all([loadStats(), loadChats()]);
+}
+
+async function loadStats() {
+  try {
+    const s = await api("/api/stats");
+    $("s-messages").textContent = fmtNum(s.messages);
+    $("s-chats").textContent = fmtNum(s.chats);
+    $("s-range").textContent = s.last_message ? "最新一条 " + fmtAgo(s.last_message) : " ";
+    const active = s.efb_active && Date.now() / 1000 - s.efb_active < 6 * 3600;
+    $("s-efb").textContent = s.efb_active ? (active ? "运行中" : "无动静") : "未知";
+    $("s-efb").classList.toggle("ok", !!active);
+    $("s-efb-d").textContent = s.efb_active ? "数据库 " + fmtAgo(s.efb_active) + "有写入" : " ";
+    $("s-sync").textContent = fmtAgo(s.synced_at);
+    $("s-devices").textContent = fmtNum(s.devices);
+  } catch (e) { /* stats are a nicety */ }
+}
+
+async function loadChats() {
+  const { chats } = await api("/api/chats");
+  state.chats = chats;
+  state.chatMap = new Map(chats.map((c) => [c.key, c]));
+  renderChats();
+}
+
+function renderChats() {
+  const q = $("chat-q").value.trim().toLowerCase();
+  const list = state.chats.filter((c) => (!state.kind || c.type === state.kind) &&
+    (!q || c.name.toLowerCase().includes(q) || (c.original || "").toLowerCase().includes(q)));
+  $("chat-count").textContent = list.length + " 个";
+  const html = list.slice(0, 600).map((c) =>
+    '<button class="chat' + (state.chat === c.key ? " on" : "") + '" data-key="' + esc(c.key) + '">' +
+    '<div class="n">' + esc(c.name) + "</div>" +
+    '<div class="m"><span>' + (KIND_LABEL[c.type] || "会话") + " · " + fmtNum(c.count) + " 条</span>" +
+    '<span class="t">' + fmtTime(c.last_ts) + "</span></div></button>").join("");
+  $("chat-list").innerHTML = html || '<div class="empty">没有匹配的会话</div>';
+}
+
+$("chat-list").onclick = (e) => {
+  const b = e.target.closest(".chat");
+  if (b) openChat(b.dataset.key);
+};
+$("chat-q").oninput = renderChats;
+$("chat-kind").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.kind = b.dataset.kind;
+  for (const x of $("chat-kind").children) x.classList.toggle("on", x === b);
+  renderChats();
+};
+
+// endregion
+// region Messages
+
+const list = $("msg-list");
+
+function setHeader(title, meta) {
+  $("view-title").textContent = title;
+  $("view-meta").textContent = meta || " ";
+}
+
+function openChat(key, around) {
+  state.chat = key;
+  state.mode = "chat";
+  state.query = null;
+  state.target = around || null;
+  $("chat-search").value = "";
+  $("chat-search").placeholder = "在此会话中搜索";
+  const c = state.chatMap.get(key);
+  setHeader(c ? c.name : key, c ? (KIND_LABEL[c.type] || "会话") + " · " + fmtNum(c.count) + " 条 · " +
+    fmtTime(c.first_ts, true) + " 起" + (c.original ? " · " + c.original : "") : "");
+  renderChats();
+  $("app").classList.add("viewing");
+  loadChat(around ? { around } : {});
+}
+
+function typeParam() { return state.types ? "&types=" + state.types : ""; }
+
+async function loadChat(opts) {
+  const token = ++state.token;
+  state.loading = true;
+  let url = "/api/messages?chat=" + encodeURIComponent(state.chat) + typeParam();
+  if (opts.around) url += "&around=" + opts.around;
+  if (opts.before) url += "&before=" + encodeURIComponent(opts.before);
+  if (opts.after) url += "&after=" + encodeURIComponent(opts.after);
+  if (!opts.before && !opts.after) list.innerHTML = '<div class="loader">加载中…</div>';
+  try {
+    const page = await api(url);
+    if (token !== state.token) return;
+    const msgs = page.messages;
+    if (opts.before) {
+      const h = list.scrollHeight, top = list.scrollTop;
+      list.querySelector(".loader.top")?.remove();
+      list.insertAdjacentHTML("afterbegin", renderList(msgs, null, state.first));
+      if (msgs.length) state.first = msgs[0];
+      state.moreBefore = page.more_before;
+      addEdgeLoaders();
+      list.scrollTop = top + (list.scrollHeight - h);
+    } else if (opts.after) {
+      list.querySelector(".loader.bottom")?.remove();
+      list.insertAdjacentHTML("beforeend", renderList(msgs, state.last, null));
+      if (msgs.length) state.last = msgs[msgs.length - 1];
+      state.moreAfter = page.more_after;
+      addEdgeLoaders();
+    } else {
+      state.first = msgs[0] || null;
+      state.last = msgs[msgs.length - 1] || null;
+      state.moreBefore = page.more_before;
+      state.moreAfter = page.more_after;
+      list.innerHTML = msgs.length ? renderList(msgs, null, null) : '<div class="empty">没有消息</div>';
+      addEdgeLoaders();
+      const target = opts.around && list.querySelector('[data-id="' + opts.around + '"]');
+      if (target) target.scrollIntoView({ block: "center" });
+      else list.scrollTop = list.scrollHeight;
+    }
+  } catch (e) {
+    if (token === state.token && !opts.before && !opts.after) list.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+  } finally {
+    if (token === state.token) state.loading = false;
+  }
+}
+
+function addEdgeLoaders() {
+  if (state.mode !== "chat") return;
+  if (state.moreBefore && !list.querySelector(".loader.top"))
+    list.insertAdjacentHTML("afterbegin", '<div class="loader top">向上滚动加载更早的消息</div>');
+  if (state.moreAfter && !list.querySelector(".loader.bottom"))
+    list.insertAdjacentHTML("beforeend", '<div class="loader bottom">向下滚动加载更新的消息</div>');
+}
+
+list.addEventListener("scroll", () => {
+  if (state.loading) return;
+  if (state.mode === "chat") {
+    if (state.moreBefore && list.scrollTop < 200 && state.first) loadChat({ before: state.first.cursor });
+    else if (state.moreAfter && list.scrollHeight - list.scrollTop - list.clientHeight < 200 && state.last)
+      loadChat({ after: state.last.cursor });
+  } else if (state.mode === "search" && state.next && list.scrollHeight - list.scrollTop - list.clientHeight < 300) {
+    runSearch(true);
+  }
+}, { passive: true });
+
+// Day dividers between messages of different days; ``prev`` / ``next`` are
+// the neighbours already shown above / below the inserted ones.
+function renderList(msgs, prev, next) {
+  let out = "", last = prev;
+  for (const m of msgs) {
+    if (!last || new Date(last.ts * 1000).toDateString() !== new Date(m.ts * 1000).toDateString())
+      out += '<div class="day"><span>' + fmtDay(m.ts) + "</span></div>";
+    out += renderMsg(m, false);
+    last = m;
+  }
+  if (next && last && new Date(last.ts * 1000).toDateString() === new Date(next.ts * 1000).toDateString()) {
+    // Older messages go above ``next``, which had the divider of its day:
+    // now the new ones open that day, so drop the old divider.
+    list.querySelector(".day")?.remove();
+  }
+  return out;
+}
+
+// endregion
+// region Message rendering
+
+const URL_RE = /(https?:\/\/[^\s<>"'，。！？、）】」]+)/g;
+
+function highlight(text, terms) {
+  if (!terms.length) return esc(text);
+  const re = new RegExp("(" + terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  return text.split(re).map((part, i) => i % 2 ? "<mark>" + esc(part) + "</mark>" : esc(part)).join("");
+}
+function richText(text, terms) {
+  return text.split(URL_RE).map((part, i) => i % 2
+    ? '<a href="' + esc(part) + '" target="_blank" rel="noopener noreferrer">' + highlight(part, terms) + "</a>"
+    : highlight(part, terms)).join("");
+}
+
+function mediaHTML(m) {
+  if (!m.media) return "";
+  const src = "/api/media/" + m.id, mime = m.mime || "";
+  if (m.type === "Image") return '<div class="media"><a href="' + src + '" target="_blank" rel="noopener"><img loading="lazy" src="' + src + '" alt="图片"></a></div>';
+  if (m.type === "Sticker") {
+    if (/tgs|lottie/.test(mime)) return '<div class="media placeholder">[动态表情]</div>';
+    if (/video/.test(mime)) return '<div class="media"><video class="sticker" src="' + src + '" autoplay loop muted playsinline preload="metadata"></video></div>';
+    return '<div class="media"><img class="sticker" loading="lazy" src="' + src + '" alt="表情"></div>';
+  }
+  if (m.type === "Video" || m.type === "Animation") {
+    const gif = m.type === "Animation";
+    return '<div class="media"><video src="' + src + '" preload="none" playsinline ' + (gif ? "loop muted controls" : "controls") + "></video></div>";
+  }
+  if (m.type === "Voice") return '<div class="media"><audio src="' + src + '" controls preload="none"></audio></div>';
+  if (m.type === "File") return '<div class="actions"><a class="btn small" href="' + src + '">下载文件</a></div>';
+  return "";
+}
+
+function renderMsg(m, inSearch) {
+  const terms = inSearch && state.query ? state.query.q.split(/\s+/).filter(Boolean) : [];
+  const cls = "msg" + (m.outgoing ? " out" : "") + (m.system ? " system" : "") + (state.target === m.id && !inSearch ? " target" : "");
+  let body = "";
+  if (m.reply) body += '<div class="reply" data-jump="' + m.reply.id + '"><b>' + esc(m.reply.sender) + "</b>：" +
+    esc(m.reply.text || "[" + (TYPE_LABEL[m.reply.type] || m.reply.type) + "]") + "</div>";
+  if (m.text) body += '<div class="msg-body">' + richText(m.text, terms) + "</div>";
+  if (m.link) {
+    const l = m.link;
+    body += '<a class="link-card" href="' + esc(l.url || "#") + '" target="_blank" rel="noopener noreferrer">' +
+      (l.image && /^https:/.test(l.image) ? '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(l.image) + '" alt="">' : "") +
+      '<div><div class="lt">' + highlight(l.title || l.url || "链接", terms) + "</div>" +
+      (l.description ? '<div class="ld">' + highlight(l.description, terms) + "</div>" : "") + "</div></a>";
+  }
+  if (m.location) body += '<div class="actions"><a class="btn small" target="_blank" rel="noopener noreferrer" href="https://maps.apple.com/?ll=' +
+    encodeURIComponent(m.location[0] + "," + m.location[1]) + '">📍 查看位置</a></div>';
+  body += mediaHTML(m);
+  if (!m.text && !m.link && !m.location && !m.media) body += '<div class="msg-body placeholder">[' + esc(TYPE_LABEL[m.type] || m.type) + "]</div>";
+  const actions = inSearch ? '<button class="btn small" data-context="' + m.id + '" data-chat="' + esc(m.chat) + '">查看上下文</button>' : "";
+  const tg = m.tg ? '<a href="' + esc(m.tg) + '" target="_blank" rel="noopener noreferrer" title="在 Telegram 中打开">TG ↗</a>' : "";
+  return '<article class="' + cls + '" data-id="' + m.id + '"><div class="msg-top"><span class="who">' + esc(m.sender) + "</span>" +
+    (inSearch && m.chat_name && m.chat_name !== m.sender ? '<span class="where">' + esc(m.chat_name) + "</span>" : "") +
+    '<span class="meta">' + esc(TYPE_LABEL[m.type] || m.type) + " · " + fmtTime(m.ts, true) + tg + "</span></div>" + body +
+    (actions ? '<div class="actions">' + actions + "</div>" : "") + "</article>";
+}
+
+// Images that cannot be loaded (expired in Telegram, hotlinking refused):
+// hide them, and say so for media of the message itself.
+document.addEventListener("error", (e) => {
+  const el = e.target;
+  if (!(el instanceof HTMLImageElement) || el.classList.contains("broken")) return;
+  el.classList.add("broken");
+  const media = el.closest(".media");
+  if (media && !media.querySelector(".gone")) media.insertAdjacentHTML("beforeend", '<div class="gone">[图片无法获取]</div>');
+}, true);
+
+list.addEventListener("click", (e) => {
+  const ctx = e.target.closest("[data-context]");
+  if (ctx) { openChat(ctx.dataset.chat, Number(ctx.dataset.context)); return; }
+  const jump = e.target.closest("[data-jump]");
+  if (jump && state.chat) openChat(state.chat, Number(jump.dataset.jump));
+});
+
+// endregion
+// region Search
+
+// "from:name" (or "from:「a name」") picks the sender; the rest is the text.
+function parseQuery(raw) {
+  let sender = null;
+  const q = raw.replace(/(?:^|\s)from[:：](?:「([^」]+)」|"([^"]+)"|(\S+))/i, (_, a, b, c) => { sender = a || b || c; return " "; });
+  return { q: q.trim(), sender };
+}
+
+function startSearch(raw, chat) {
+  const parsed = parseQuery(raw);
+  if (!parsed.q && !parsed.sender && !state.types) return;
+  state.mode = "search";
+  state.query = Object.assign(parsed, { chat });
+  state.next = null;
+  state.target = null;
+  const c = chat && state.chatMap.get(chat);
+  setHeader(c ? "在「" + c.name + "」中搜索" : "搜索全部聊天",
+    [parsed.q && "“" + parsed.q + "”", parsed.sender && "发送人：" + parsed.sender].filter(Boolean).join(" · "));
+  $("app").classList.add("viewing");
+  runSearch(false);
+}
+
+async function runSearch(more) {
+  const token = ++state.token, s = state.query;
+  state.loading = true;
+  let url = "/api/search?q=" + encodeURIComponent(s.q) + typeParam();
+  if (s.sender) url += "&sender=" + encodeURIComponent(s.sender);
+  if (s.chat) url += "&chat=" + encodeURIComponent(s.chat);
+  if (more && state.next) url += "&before=" + encodeURIComponent(state.next);
+  if (!more) list.innerHTML = '<div class="loader">搜索中…</div>';
+  const started = performance.now();
+  try {
+    const page = await api(url);
+    if (token !== state.token) return;
+    state.next = page.next;
+    const html = page.messages.map((m) => renderMsg(m, true)).join("");
+    if (more) {
+      list.querySelector(".loader.bottom")?.remove();
+      list.insertAdjacentHTML("beforeend", html);
+    } else {
+      list.innerHTML = html || '<div class="empty">没有找到</div>';
+      list.scrollTop = 0;
+      $("view-meta").textContent += " · 用时 " + Math.round(performance.now() - started) + " 毫秒";
+    }
+    if (state.next) list.insertAdjacentHTML("beforeend", '<div class="loader bottom">继续滚动加载更多</div>');
+  } catch (e) {
+    if (token === state.token && !more) list.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+  } finally {
+    if (token === state.token) state.loading = false;
+  }
+}
+
+$("global-q").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing) { state.chat = null; renderChats(); startSearch($("global-q").value, null); }
+});
+$("chat-search").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.isComposing) return;
+  const chat = state.chat || (state.query && state.query.chat);
+  const v = $("chat-search").value.trim();
+  if (!v && chat) openChat(chat);
+  else if (v) startSearch(v, chat || null);
+});
+$("types").onchange = () => {
+  state.types = $("types").value;
+  if (state.mode === "chat") loadChat({});
+  else if (state.mode === "search") runSearch(false);
+};
+$("back").onclick = () => $("app").classList.remove("viewing");
+
+// endregion
+// region Devices
+
+async function loadDevices() {
+  const { devices } = await api("/api/devices");
+  $("device-list").innerHTML = devices.map((d) =>
+    '<div class="device"><div class="info"><div class="n">' + esc(d.name) + (d.current ? '<span class="tag">当前</span>' : "") +
+    (d.synced ? '<span class="tag">已同步</span>' : "") + '</div><div class="m">登记于 ' + fmtTime(d.created, true) +
+    " · 最近使用 " + (d.last_used ? fmtAgo(d.last_used) : "–") + " · " + d.sessions + " 个会话</div></div>" +
+    '<button class="btn small danger" data-revoke="' + esc(d.id) + '" data-current="' + (d.current ? 1 : "") + '">移除</button></div>'
+  ).join("") || '<div class="empty">没有设备</div>';
+}
+$("open-devices").onclick = async () => {
+  $("devices").showModal();
+  try { await loadDevices(); } catch (e) { $("device-list").innerHTML = '<div class="empty">' + esc(e.message) + "</div>"; }
+};
+$("close-devices").onclick = () => $("devices").close();
+$("device-list").onclick = async (e) => {
+  const b = e.target.closest("[data-revoke]");
+  if (!b) return;
+  const current = !!b.dataset.current;
+  if (!confirm(current ? "移除当前设备后会立即退出，要再用需重新登记。确定？" : "移除这个设备？用它登录的会话会立即失效。")) return;
+  try {
+    await api("/api/devices/" + encodeURIComponent(b.dataset.revoke), { method: "DELETE" });
+    if (current) { $("devices").close(); showAuth(); } else { loadDevices(); loadStats(); }
+  } catch (e) { alert(e.message); }
+};
+$("logout").onclick = async () => {
+  try { await api("/api/logout", { body: {} }); } catch (e) { /* signed out anyway */ }
+  $("devices").close();
+  showAuth();
+};
+
+// endregion
+// region Start
+
+(async () => {
+  const m = location.hash.match(/^#enroll=([\w-]+)$/);
+  if (m) {
+    enrollToken = m[1];
+    history.replaceState(null, "", location.pathname);
+  }
+  if (!window.PublicKeyCredential) authMsg("这个浏览器不支持通行密钥。", true);
+  if (enrollToken) { showAuth(); return; }
+  try {
+    const me = await api("/api/me", { quiet: true });
+    if (me.signed_in) startApp(); else showAuth();
+  } catch (e) { showAuth(); authMsg(e.message, true); }
+  setInterval(() => { if (!$("app").hidden) loadStats(); }, 60000);
+})();
+
+// endregion
+</script>
+</body>
+</html>

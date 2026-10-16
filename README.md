@@ -1,6 +1,6 @@
 # oh-my-efb
 
-基于网页版微信 EH Forwarder Bot（EFB）的自用方案，把微信消息转发到 Telegram，也可以在 Telegram 里收发微信。在上游组件之外，本仓库加了一个用大模型定时总结群聊的中间件。
+基于网页版微信 EH Forwarder Bot（EFB）的自用方案，把微信消息转发到 Telegram，也可以在 Telegram 里收发微信。在上游组件之外，本仓库加了一个用大模型定时总结群聊的中间件，以及一个可以搜索全部聊天记录的网页。
 
 > **使用前提：你的微信号还能登录网页版微信。**
 > 大约 2017 年之前注册的微信号才保留这个权限。扫码时如果提示“为了你的帐号安全，此微信号不能登录网页微信”，这套方案就用不了，本仓库没有别的登录方式。
@@ -38,6 +38,15 @@ chats:
 
 总结时，群聊记录会原文发送给你配置的接口服务方。全部配置项和行为细节见 [summary-middleware/README.md](summary-middleware/README.md)。
 
+### 聊天记录网页（`chatlog/`）
+
+把 EFB 转发过的消息做成可搜索的网页，按会话浏览，也能全文搜索，按人、按类型筛选。不用密码，登记过的设备用指纹或面容登录（通行密钥），新设备要靠 bot 发到 Telegram 的一次性链接来登记。
+
+- 消息来自 Telegram 主端的 `tgdata.db`，能导入全部历史。网页服务单独跑，后台增量同步。
+- 配套的 `specialhua.chatlog` 中间件只记会话名和发言人名，补上 `tgdata.db` 缺的名字。
+
+部署和使用见 [chatlog/README.md](chatlog/README.md)。
+
 ### `/extra` 支持中间件的命令
 
 `telegram-master/` 里原本 `/extra` 只能列出和调用从端的附加命令，中间件的命令既不显示也调不了。现在两者都可以，总结中间件的“立即汇总”（私聊里发 `/extra` 可以找到）靠的就是这个改动。
@@ -52,6 +61,7 @@ chats:
 | `telegram-master/` | Telegram 主端（Ovler-Young fork） | `dev-topic-custom-emoji` @ `24c1e44`，另有上面的改动 | [Ovler-Young/efb-telegram-master](https://github.com/Ovler-Young/efb-telegram-master) |
 | `wechat-slave/` | 微信从端 | `v2.0.7` | [ehForwarderBot/efb-wechat-slave](https://github.com/ehForwarderBot/efb-wechat-slave) |
 | `summary-middleware/` | 群聊总结中间件（`specialhua.summary`） | 本仓库 | 无 |
+| `chatlog/` | 聊天记录网页和中间件（`specialhua.chatlog`） | 本仓库 | 无 |
 
 版本是有意固定的。
 
@@ -68,6 +78,7 @@ pip install ./core
 pip install ./wechat-slave
 pip install ./telegram-master
 pip install ./summary-middleware   # 可选
+pip install ./chatlog              # 可选，部署见 chatlog/README.md
 ```
 
 EFB 本身的配置（bot token、管理员 ID、话题群等）按各组件自带的文档填写，见 [telegram-master/README.rst](telegram-master/README.rst) 和 [wechat-slave/README.rst](wechat-slave/README.rst)。
