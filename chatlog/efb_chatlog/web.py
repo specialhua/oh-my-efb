@@ -243,7 +243,7 @@ def create_app(paths: Paths, config: Config, sync: bool = True) -> FastAPI:
     def search(q: str = "", chat: Optional[str] = None, sender: Optional[str] = None,
                types: Optional[str] = None, before: Optional[str] = None, since: Optional[float] = None,
                until: Optional[float] = None, _: str = Depends(signed_in)):
-        if not q.strip() and not sender and not types:
+        if not q.strip() and not sender and not types and since is None and until is None:
             raise HTTPException(400, "请输入要搜索的内容。")
         return archive.search(q.strip()[:200], chat=chat or None, sender=(sender or "").strip() or None,
                               types=type_list(types), before=cursor(before), since=since, until=until)
