@@ -281,6 +281,7 @@ dialog::backdrop { background: rgba(5, 10, 18, .55); }
           <button data-kind="" class="on">全部</button>
           <button data-kind="Group">群聊</button>
           <button data-kind="Private">私聊</button>
+          <button data-kind="MP">公众号</button>
         </div>
       </div>
       <div class="chat-list" id="chat-list"></div>
@@ -333,7 +334,13 @@ dialog::backdrop { background: rgba(5, 10, 18, .55); }
 const $ = (id) => document.getElementById(id);
 const TYPE_LABEL = { Text: "文字", Link: "链接", Image: "图片", Video: "视频", Animation: "动图", File: "文件",
   Voice: "语音", Sticker: "表情", Location: "位置", Unsupported: "不支持", Status: "状态" };
-const KIND_LABEL = { Group: "群聊", Private: "私聊", System: "系统" };
+const KIND_LABEL = { Group: "群聊", Private: "私聊", MP: "公众号", System: "系统" };
+// Where in Telegram a message was delivered, apart from what kind of chat it is.
+const PLACE_LABEL = { bot: "Bot 私聊", topic: "话题", group: "绑定群" };
+function chatMeta(c) {
+  return (KIND_LABEL[c.type] || "会话") + (PLACE_LABEL[c.place] ? " · " + PLACE_LABEL[c.place] : "") +
+    " · " + fmtNum(c.count) + " 条";
+}
 
 // "Box of Memories" above is in Playfair Display Bold (© 2017 The Playfair Display Project Authors,
 // SIL Open Font License 1.1), as outlines so that no font is loaded.
@@ -545,7 +552,7 @@ function renderChats() {
   const html = list.slice(0, 600).map((c) =>
     '<button class="chat' + (state.chat === c.key ? " on" : "") + '" data-key="' + esc(c.key) + '">' +
     '<div class="n">' + esc(c.name) + "</div>" +
-    '<div class="m"><span>' + (KIND_LABEL[c.type] || "会话") + " · " + fmtNum(c.count) + " 条</span>" +
+    '<div class="m"><span>' + chatMeta(c) + "</span>" +
     '<span class="t">' + fmtTime(c.last_ts) + "</span></div></button>").join("");
   $("chat-list").innerHTML = html || '<div class="empty">没有匹配的会话</div>';
 }
@@ -590,7 +597,7 @@ function openChat(key, around) {
   $("chat-search").value = "";
   $("chat-search").placeholder = "在此会话中搜索";
   const c = state.chatMap.get(key);
-  setHeader(c ? c.name : key, c ? (KIND_LABEL[c.type] || "会话") + " · " + fmtNum(c.count) + " 条 · " +
+  setHeader(c ? c.name : key, c ? chatMeta(c) + " · " +
     fmtTime(c.first_ts, true) + " 起" + (c.original ? " · " + c.original : "") : "");
   renderChats();
   $("app").classList.add("viewing");
@@ -759,7 +766,8 @@ function renderMsg(m, inSearch) {
   const tg = m.tg ? '<a href="' + esc(m.tg) + '" target="_blank" rel="noopener noreferrer" title="在 Telegram 中打开">TG ↗</a>' : "";
   return '<article class="' + cls + '" data-id="' + m.id + '"><div class="msg-top"><span class="who">' + esc(m.sender) + "</span>" +
     (inSearch && m.chat_name && m.chat_name !== m.sender ? '<span class="where">' + esc(m.chat_name) + "</span>" : "") +
-    '<span class="meta">' + esc(TYPE_LABEL[m.type] || m.type) + " · " + fmtTime(m.ts, true) + tg + "</span></div>" + body +
+    '<span class="meta">' + esc(TYPE_LABEL[m.type] || m.type) + " · " + fmtTime(m.ts, true) +
+    (PLACE_LABEL[m.place] ? " · " + PLACE_LABEL[m.place] : "") + tg + "</span></div>" + body +
     (actions ? '<div class="actions">' + actions + "</div>" : "") + "</article>";
 }
 

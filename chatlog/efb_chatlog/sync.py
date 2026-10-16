@@ -9,7 +9,7 @@ import pickle
 import sqlite3
 import threading
 from collections import UserDict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 from . import store
@@ -43,7 +43,9 @@ class _Unpickler(pickle.Unpickler):
     anything from them."""
 
     SAFE = {("builtins", "set"): set, ("builtins", "frozenset"): frozenset,
-            ("builtins", "object"): object, ("collections", "UserDict"): UserDict}
+            ("builtins", "object"): object, ("collections", "UserDict"): UserDict,
+            ("datetime", "datetime"): datetime, ("datetime", "date"): date,
+            ("datetime", "timedelta"): timedelta}
 
     def find_class(self, module: str, name: str):
         if (module, name) in self.SAFE:
@@ -59,6 +61,23 @@ class _Unpickler(pickle.Unpickler):
 
 def load_pickle(data: bytes) -> Any:
     return _Unpickler(io.BytesIO(data)).load()
+
+
+def chat_type_of(chat_type: str, blob: Optional[bytes]) -> str:
+    """Type of a chat in ``slavechatinfo``, telling official accounts from
+    other private chats by the chat object pickled with it."""
+    if chat_type != "Private" or not blob:
+        return chat_type
+    try:
+        chat = load_pickle(bytes(blob))
+    except Exception:
+        return chat_type
+    vendor = getattr(chat, "vendor_specific", None)
+    # The chat with oneself is marked as an official account too.
+    if isinstance(vendor, dict) and vendor.get("is_mp") \
+            and "SelfChatMember" not in type(getattr(chat, "other", None)).__name__:
+        return "MP"
+    return chat_type
 
 
 def message_extra(blob: Optional[bytes]) -> Dict[str, Any]:
@@ -101,6 +120,8 @@ class Syncer:
         self.db = store.connect(paths.archive)
         self.lock = threading.Lock()
         self.puid_mtime = 0.0
+        self.chat_types: Dict[bytes, str] = {}
+        """Type of private chats by their pickle, so that each is loaded once."""
 
     def timestamp(self, value: Any) -> float:
         if not value:
@@ -142,15 +163,21 @@ class Syncer:
             rows)
         return {i[1] for i in rows}
 
+    STATS = ("INSERT OR REPLACE INTO chats (key, count, first_ts, last_ts, senders, hint, last_tg) "
+             "SELECT chat_key, count(*), min(ts), max(ts), count(DISTINCT sender_key), "
+             "max(sender_hint(chat_key, sender_key, outgoing)), "
+             "(SELECT substr(l.master_msg_id, 1, instr(l.master_msg_id, '.') - 1) FROM messages l "
+             "WHERE l.chat_key = messages.chat_key ORDER BY l.ts DESC, l.id DESC LIMIT 1) "
+             "FROM messages")
+
     def update_stats(self, chats: Optional[Iterable[str]] = None):
         if chats is None:
             self.db.execute("DELETE FROM chats")
-            self.db.execute("INSERT INTO chats SELECT chat_key, count(*), min(ts), max(ts), "
-                            "count(DISTINCT sender_key) FROM messages GROUP BY chat_key")
+            self.db.execute(self.STATS + " GROUP BY chat_key")
+            store.set_meta(self.db, "stats_version", store.STATS_VERSION)
             return
         for key in chats:
-            self.db.execute("INSERT OR REPLACE INTO chats SELECT chat_key, count(*), min(ts), max(ts), "
-                            "count(DISTINCT sender_key) FROM messages WHERE chat_key = ? GROUP BY chat_key", (key,))
+            self.db.execute(self.STATS + " WHERE chat_key = ? GROUP BY chat_key", (key,))
 
     def run(self, progress: Optional[Callable[[int, int], None]] = None) -> int:
         """Copy what is new in ``tgdata.db``; returns the number of new rows."""
@@ -175,7 +202,7 @@ class Syncer:
             if row is None or row[0] != store.get_meta(self.db, "tg_check"):
                 logger.warning("tgdata.db was rewritten, copying it again from the start")
                 cursor = 0
-        full = cursor == 0
+        full = cursor == 0 or store.get_meta(self.db, "stats_version") != store.STATS_VERSION
         total = tg.execute("SELECT max(rowid) FROM msglog").fetchone()[0] or 0
         end = cursor
         cursor = max(0, cursor - self.tail)
@@ -202,14 +229,27 @@ class Syncer:
     def sync_names(self, tg: sqlite3.Connection):
         now = datetime.now().timestamp()
         rows = []
-        for channel, uid, group, name, alias, chat_type in tg.execute(
+        for channel, uid, group, name, alias, chat_type, blob in tg.execute(
                 "SELECT slave_channel_id, slave_chat_uid, slave_chat_group_id, slave_chat_name, "
-                "slave_chat_alias, slave_chat_type FROM slavechatinfo"):
+                "slave_chat_alias, slave_chat_type, CASE WHEN slave_chat_group_id IS NULL "
+                "AND slave_chat_type = 'Private' THEN pickle END FROM slavechatinfo"):
             key = " ".join(i for i in (channel, uid, group) if i)
+            if not group and blob:
+                blob = bytes(blob)
+                if len(self.chat_types) > 50000:
+                    self.chat_types.clear()
+                if blob not in self.chat_types:
+                    self.chat_types[blob] = chat_type_of(chat_type, blob)
+                chat_type = self.chat_types[blob]
             rows.append((key, name or uid, alias or None, None if group else chat_type, store.RANK_CHAT_INFO, now))
         rows += self.puid_names(now)
+        try:
+            topics = sorted({str(i[0]) for i in tg.execute("SELECT DISTINCT topic_chat_id FROM topicassoc")})
+        except sqlite3.OperationalError:  # before topics
+            topics = []
         with self.db:
             store.put_names(self.db, rows)
+            store.set_meta(self.db, "topic_chats", json.dumps(topics))
 
     def puid_names(self, now: float) -> List[store.NameRow]:
         """Names of WeChat contacts and groups as last seen by the slave

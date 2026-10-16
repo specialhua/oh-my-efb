@@ -18,7 +18,18 @@ RANK_LIVE = 3
 """Name seen on a message by the middleware, the most current."""
 
 NameRow = Tuple[str, str, Optional[str], Optional[str], int, float]
-"""(key, name, alias, chat type, rank, updated at)"""
+"""(key, name, alias, chat type, rank, updated at)
+
+Chat types: ``Group``, ``Private``, ``MP`` (an official account, which the
+WeChat slave channel makes a private chat) and ``System``.
+"""
+
+STATS_VERSION = "2"
+"""Version of what the ``chats`` table holds; on a change, the next sync
+counts it again from the messages."""
+
+HINT_PRIVATE = 1
+HINT_GROUP = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -61,7 +72,9 @@ CREATE TABLE IF NOT EXISTS chats (
     count INTEGER NOT NULL,
     first_ts REAL NOT NULL,
     last_ts REAL NOT NULL,
-    senders INTEGER NOT NULL
+    senders INTEGER NOT NULL,
+    hint INTEGER,
+    last_tg TEXT
 );
 
 CREATE TABLE IF NOT EXISTS names (
@@ -85,18 +98,58 @@ def connect(path: Path) -> sqlite3.Connection:
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
     db.executescript(SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(chats)")}
+    for column in ("hint INTEGER", "last_tg TEXT"):
+        if column.split()[0] not in columns:
+            try:
+                db.execute("ALTER TABLE chats ADD COLUMN " + column)
+            except sqlite3.OperationalError:  # added by the other process meanwhile
+                pass
+    db.create_function("sender_hint", 3, sender_hint, deterministic=True)
     return db
+
+
+def sender_hint(chat_key: str, sender_key: Optional[str], outgoing: int) -> int:
+    """What a message tells of its chat by the form of its sender:
+    ``module member group`` with a member other than the chat is someone in
+    a group; ``module uid uid`` (or ``module uid``) with the uid of the chat
+    is the other side of a private chat."""
+    if outgoing or not sender_key:
+        return 0
+    parts = sender_key.split(" ")
+    if len(parts) < 2 or parts[1].startswith("__"):  # __self__, __system__
+        return 0
+    chat_uid = chat_key.split(" ")[-1]
+    if len(parts) > 2 and parts[2] == chat_uid and parts[1] != chat_uid:
+        return HINT_GROUP
+    if parts[1] == chat_uid and (len(parts) < 3 or parts[2] == chat_uid):
+        return HINT_PRIVATE
+    return 0
+
+
+# An official account is a private chat to EFB and to ``slavechatinfo``;
+# whichever source knows it is one wins over those that say private.
+_CHAT_TYPE = (
+    "CASE WHEN 'MP' IN (names.chat_type, excluded.chat_type) "
+    "AND IFNULL(names.chat_type, 'Private') IN ('Private', 'MP') "
+    "AND IFNULL(excluded.chat_type, 'Private') IN ('Private', 'MP') THEN 'MP' "
+    "WHEN excluded.rank >= names.rank THEN COALESCE(excluded.chat_type, names.chat_type) "
+    "ELSE names.chat_type END")
 
 
 def put_names(db: sqlite3.Connection, rows: Iterable[NameRow]):
     """Save names, unless one from a better source is already there."""
+    better = "excluded.rank >= names.rank"
     db.executemany(
         "INSERT INTO names (key, name, alias, chat_type, rank, updated) VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT (key) DO UPDATE SET name = excluded.name, alias = excluded.alias, "
-        "chat_type = COALESCE(excluded.chat_type, names.chat_type), "
-        "rank = excluded.rank, updated = excluded.updated "
-        "WHERE excluded.rank >= names.rank AND (excluded.name IS NOT names.name "
-        "OR excluded.alias IS NOT names.alias OR excluded.chat_type IS NOT names.chat_type)",
+        "ON CONFLICT (key) DO UPDATE SET "
+        "name = CASE WHEN {0} THEN excluded.name ELSE names.name END, "
+        "alias = CASE WHEN {0} THEN excluded.alias ELSE names.alias END, "
+        "chat_type = {1}, "
+        "rank = CASE WHEN {0} THEN excluded.rank ELSE names.rank END, "
+        "updated = CASE WHEN {0} THEN excluded.updated ELSE names.updated END "
+        "WHERE {0} AND (excluded.name IS NOT names.name OR excluded.alias IS NOT names.alias "
+        "OR excluded.chat_type IS NOT names.chat_type) OR ({1}) IS NOT names.chat_type".format(better, _CHAT_TYPE),
         list(rows))
 
 
