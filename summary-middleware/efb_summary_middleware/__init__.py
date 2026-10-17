@@ -19,6 +19,7 @@ from ehforwarderbot.types import ModuleID, InstanceID
 from ehforwarderbot.utils import extra, get_config_path, get_data_path
 
 from . import render
+from .ask import Asker
 from .jev import DEFAULT_BASE_URL as JEV_BASE_URL, Jev
 from .labeler import MEDIA, TASKS, Labeler
 from .store import LabeledRow, Store
@@ -92,6 +93,9 @@ class SummaryMiddleware(Middleware):
     A summary is also made on ``/summary`` sent to a chat from Telegram (the
     command itself is not delivered to the slave channel), and on the
     additional feature listed in ``/extra``.
+
+    ``/ask`` answers a question with the same model, and sends the answer to
+    the slave chat as the user once approved, see :class:`.ask.Asker`.
     """
 
     middleware_id: ModuleID = ModuleID("specialhua.summary")
@@ -120,6 +124,7 @@ class SummaryMiddleware(Middleware):
         self.targets: List[Target] = []
         self.config_path = get_config_path(self.middleware_id)
         self.config_lock = threading.Lock()
+        self.asker = Asker(self)
         config = self.load_config()
         self.config_mtime = self.config_path.stat().st_mtime
         self.apply_config(config)
@@ -141,14 +146,43 @@ class SummaryMiddleware(Middleware):
         for key in ("base_url", "api_key", "model"):
             if not isinstance(data.get(key), str) or not data[key]:
                 raise ValueError("{}: \"{}\" must be a non-empty string.".format(self.middleware_id, key))
+        data["ask"] = self.load_ask(data.get("ask"), data)
+        # /ask works in every chat, so with it on no chat needs a summary.
         chats = data.get("chats")
-        if isinstance(chats, (str, int, dict)):
+        if chats is None:
+            chats = []
+        elif isinstance(chats, (str, int, dict)):
             chats = [chats]
-        if not isinstance(chats, list) or not chats:
+        if not isinstance(chats, list) or (not chats and data["ask"] is None):
             raise ValueError("{}: \"chats\" must list at least one chat name or ID.".format(self.middleware_id))
         data["chats"] = [self.load_target(i, data) for i in chats]
         data["jev"] = self.load_jev(data.get("jev"))
         return data
+
+    def load_ask(self, entry: Any, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Settings of ``/ask`` from the optional ``ask`` section; ``None``
+        when it is turned off with ``ask: false``."""
+        if entry is False:
+            return None
+        if entry is None or entry is True:
+            entry = {}
+        if not isinstance(entry, dict):
+            raise ValueError("{}: \"ask\" must be a mapping or false.".format(self.middleware_id))
+        for key in ("model", "prompt"):
+            value = entry.get(key)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError("{}: \"ask.{}\" must be a non-empty string.".format(self.middleware_id, key))
+        for key, default in (("max_chars", 150), ("timeout", 60)):
+            value = entry.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                raise ValueError("{}: \"ask.{}\" must be a positive number.".format(self.middleware_id, key))
+        return {
+            "summarizer": Summarizer(base_url=data["base_url"], api_key=data["api_key"],
+                                     model=entry.get("model") or data["model"],
+                                     timeout=float(entry.get("timeout", 60))),
+            "max_chars": int(entry.get("max_chars", 150)),
+            "prompt": entry.get("prompt") or "",
+        }
 
     def load_jev(self, entry: Any) -> Optional[Dict[str, Any]]:
         """Settings of labeling from the optional ``jev`` section: the
@@ -229,6 +263,8 @@ class SummaryMiddleware(Middleware):
         self.labeler: Optional[Labeler] = jev.get("labeler")
         self.min_confidence: float = jev.get("min_confidence", 0.6)
         self.highlight: float = jev.get("highlight", 0.2)
+        ask = config['ask'] or {}
+        self.asker.configure(ask.get("summarizer"), ask.get("max_chars", 150), ask.get("prompt", ""))
         self.targets = targets
 
     def reload_config(self):
@@ -252,6 +288,17 @@ class SummaryMiddleware(Middleware):
     # region Logging messages
 
     def process_message(self, message: Message) -> Optional[Message]:
+        text = self.own_text(message)
+        if text is not None:
+            self.asker.strip_inline_prefix(message)
+            ask = self.asker.args(text)
+            if ask is not None:
+                try:
+                    self.reload_config()
+                    self.asker.ask(message, ask)
+                except Exception:
+                    self.logger.exception("Failed to handle /ask %s", message)
+                return None
         args = self.command_args(message)
         if args is not None:
             try:
@@ -372,17 +419,24 @@ class SummaryMiddleware(Middleware):
             self.logger.debug("Labeled %s messages of %s", len(labels), target.name)
 
     @staticmethod
-    def command_args(message: Message) -> Optional[str]:
-        """Arguments of a ``/summary`` command sent from the master channel,
+    def own_text(message: Message) -> Optional[str]:
+        """Text of a text message the user sends from the master channel,
         ``None`` for any other message."""
         try:
             if message.type != MsgType.Text or not isinstance(message.deliver_to, SlaveChannel) \
                     or not isinstance(message.author, SelfChatMember):
                 return None
-            match = COMMAND.match((message.text or "").strip())
-            return (match.group(1) or "").strip() if match else None
+            return message.text or ""
         except Exception:
             return None
+
+    @classmethod
+    def command_args(cls, message: Message) -> Optional[str]:
+        """Arguments of a ``/summary`` command sent from the master channel,
+        ``None`` for any other message."""
+        text = cls.own_text(message)
+        match = COMMAND.match(text.strip()) if text is not None else None
+        return (match.group(1) or "").strip() if match else None
 
     def handle_command(self, message: Message, args: str):
         self.reload_config()
@@ -577,10 +631,11 @@ class SummaryMiddleware(Middleware):
     def thread_kwargs(thread_id: Optional[int]) -> Dict[str, Any]:
         return {"message_thread_id": thread_id} if thread_id else {}
 
-    def send_text(self, text: str, destination: Optional[Destination] = None):
+    def send_text(self, text: str, destination: Optional[Destination] = None) -> Any:
         chat_id, thread_id = destination or self.admin()
-        coordinator.master.bot_manager.send_message(  # type: ignore[attr-defined]
-            chat_id, text, parse_mode="HTML", **self.thread_kwargs(thread_id))
+        # From the main bot, which can add buttons to it later.
+        return coordinator.master.bot_manager.send_message(  # type: ignore[attr-defined]
+            chat_id, text, parse_mode="HTML", _force_main_bot=True, **self.thread_kwargs(thread_id))
 
     def report(self, text: str, destination: Optional[Destination] = None):
         """Send a notice, to the admin if it can't reach its destination; never raises."""
