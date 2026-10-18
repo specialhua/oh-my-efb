@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 import requests
 
@@ -72,13 +72,14 @@ class Summarizer:
             size += len(line) + 1
         return chunks
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: Union[str, List[Dict[str, Any]]]) -> str:
+        """``user`` is text, or a list of content parts, e.g. with an image."""
         error: Exception = RuntimeError("no attempt made")
         for attempt in range(self.attempts):
             if attempt:
                 time.sleep(self.retry_wait)
             try:
-                self.logger.info("Completion attempt %s: %s chars", attempt + 1, len(system) + len(user))
+                self.logger.info("Completion attempt %s: %s chars", attempt + 1, len(system) + len(str(user)))
                 status, body = self.post({"model": self.model, "temperature": 0.3,
                                           "messages": [{"role": "system", "content": system},
                                                        {"role": "user", "content": user}]})
