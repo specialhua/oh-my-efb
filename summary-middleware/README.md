@@ -51,7 +51,7 @@ chats:                 # 要总结的群：群名、备注名或 chat ID，任�
 # timeout: 180         # 单次请求超时（秒）
 
 # ask:                 # 可选：/ask 默认开启，沿用上面的 base_url、api_key、model
-#   max_chars: 150     # 在提示词里要求回答不超过多少字
+#   max_chars: 150     # 回答最多多少字；需要展开的问题会尽量用足，简单问题仍会简短
 #   model: gpt-4o-mini # 单独换一个模型
 #   prompt: |          # 覆盖内置提示词，其中的 {max_chars} 会换成上面的字数
 #     ...
