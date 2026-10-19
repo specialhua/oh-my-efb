@@ -48,6 +48,16 @@ model: deepseek-chat
 
 以前写在群聊总结配置里的 `base_url`、`api_key` 和 `jev.api_key` 仍然有效，不迁移也能照常运行。详见 [ai-middleware/README.md](ai-middleware/README.md)。
 
+### 待办提醒（`todo-middleware/`）
+
+回复一条消息发 `/todo`，把它设为待办，自己发的消息和转发给 bot 的消息也可以。到时间后，bot 在私聊里提醒你，附带原文，还能跳回原消息。
+
+- **AI 提取**：模型按消息发送的时间推算“下周一”这类日期，判断开始时间、地点和备注建议；你在确认卡片上多选提醒时间（前 1 天到前 10 分钟，也可以自定义）。
+- **手动填写**：在和 bot 的私聊里逐项填写。填写期间，私聊里的文字不会转到微信。
+- **管理**：`/todos` 列出未完成的待办；提醒消息上可以点完成，或者推迟 10 分钟、1 小时、到明早 8 点。
+
+详见 [todo-middleware/README.md](todo-middleware/README.md)。
+
 ### 聊天记录网页（`chatlog/`）
 
 把 EFB 转发过的消息做成可搜索的网页，按会话浏览，也能全文搜索，按人、按类型筛选。不用密码，登记过的设备用指纹或面容登录（通行密钥），新设备要靠 bot 发到 Telegram 的一次性链接来登记。
@@ -72,6 +82,7 @@ model: deepseek-chat
 | `wechat-slave/` | 微信从端 | `v2.0.7` | [ehForwarderBot/efb-wechat-slave](https://github.com/ehForwarderBot/efb-wechat-slave) |
 | `ai-middleware/` | AI 公共配置中间件（`specialhua.ai`） | 本仓库 | 无 |
 | `summary-middleware/` | 群聊总结中间件（`specialhua.summary`） | 本仓库 | 无 |
+| `todo-middleware/` | 待办提醒中间件（`specialhua.todo`） | 本仓库 | 无 |
 | `chatlog/` | 聊天记录网页和中间件（`specialhua.chatlog`） | 本仓库 | 无 |
 
 版本是有意固定的。
@@ -88,8 +99,9 @@ model: deepseek-chat
 pip install ./core
 pip install ./wechat-slave
 pip install ./telegram-master
-pip install ./ai-middleware        # 群聊总结需要
+pip install ./ai-middleware        # 群聊总结、待办的 AI 提取需要
 pip install ./summary-middleware   # 可选
+pip install ./todo-middleware      # 可选
 pip install ./chatlog              # 可选，部署见 chatlog/README.md
 ```
 
@@ -101,6 +113,7 @@ EFB 本身的配置（bot token、管理员 ID、话题群等）按各组件自�
 middlewares:
   - specialhua.ai
   - specialhua.summary
+  - specialhua.todo      # 可选：待办提醒
 ```
 
 首次登录要在前台运行 `ehforwarderbot` 扫码。日常更新、备份和恢复的步骤记在本地的 `local/docs/EFB_DAILY_OPS.md`。
