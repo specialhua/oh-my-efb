@@ -17,17 +17,13 @@
   - `/summary 7`：最近 7 天
   - `/summary 500条`：最近 500 条
 - **发到哪**：群绑定了 Telegram 群组就发到群组，走话题分流就发到它的话题，都没有则发到和 bot 的私聊。
-- **接口**：任何兼容 OpenAI `/chat/completions` 的服务都能用，比如 DeepSeek 或各类中转站。
+- **接口**：任何兼容 OpenAI `/chat/completions` 的服务都能用，比如 DeepSeek 或各类中转站。地址和 key 写在下面的 AI 中间件里。
 - **改配置不用重启**：配置文件保存后一分钟内自动生效，换模型、改提示词、增减群都一样。
 - **数据**：消息只存文字，放在本机的 SQLite 里，按设定的天数自动清理。图片、语音等只记为 `[图片]`、`[语音]` 占位。
 
-最小配置（`~/.ehforwarderbot/profiles/default/specialhua.summary/config.yaml`）：
+最小配置（`~/.ehforwarderbot/profiles/default/specialhua.summary/config.yaml`，接口地址和 key 见下一节）：
 
 ```yaml
-base_url: https://api.deepseek.com
-api_key: sk-xxxx
-model: deepseek-chat
-
 interval_days: 3       # 每 3 天自动汇总一次
 lookback_days: 3       # 汇总最近 3 天
 max_messages: 10000    # 最多 10000 条
@@ -37,6 +33,20 @@ chats:
 ```
 
 总结时，群聊记录会原文发送给你配置的接口服务方。全部配置项和行为细节见 [summary-middleware/README.md](summary-middleware/README.md)。
+
+### AI 中间件（`ai-middleware/`）
+
+集中保存大模型接口和 Jev 的地址、API key、默认模型，群聊总结、`/ask` 以及以后用到 AI 的功能都从这里取，各自只配提示词、模型等自己的设置。可以配多个服务，用 `provider: 名字` 选。
+
+最小配置（`~/.ehforwarderbot/profiles/default/specialhua.ai/config.yaml`）：
+
+```yaml
+base_url: https://api.deepseek.com
+api_key: sk-xxxx
+model: deepseek-chat
+```
+
+以前写在群聊总结配置里的 `base_url`、`api_key` 和 `jev.api_key` 仍然有效，不迁移也能照常运行。详见 [ai-middleware/README.md](ai-middleware/README.md)。
 
 ### 聊天记录网页（`chatlog/`）
 
@@ -60,6 +70,7 @@ chats:
 | `core/` | `ehforwarderbot` 框架 | `v2.1.1` | [ehForwarderBot/ehForwarderBot](https://github.com/ehForwarderBot/ehForwarderBot) |
 | `telegram-master/` | Telegram 主端（Ovler-Young fork） | `dev-topic-custom-emoji` @ `24c1e44`，另有上面的改动 | [Ovler-Young/efb-telegram-master](https://github.com/Ovler-Young/efb-telegram-master) |
 | `wechat-slave/` | 微信从端 | `v2.0.7` | [ehForwarderBot/efb-wechat-slave](https://github.com/ehForwarderBot/efb-wechat-slave) |
+| `ai-middleware/` | AI 公共配置中间件（`specialhua.ai`） | 本仓库 | 无 |
 | `summary-middleware/` | 群聊总结中间件（`specialhua.summary`） | 本仓库 | 无 |
 | `chatlog/` | 聊天记录网页和中间件（`specialhua.chatlog`） | 本仓库 | 无 |
 
@@ -77,16 +88,18 @@ chats:
 pip install ./core
 pip install ./wechat-slave
 pip install ./telegram-master
+pip install ./ai-middleware        # 群聊总结需要
 pip install ./summary-middleware   # 可选
 pip install ./chatlog              # 可选，部署见 chatlog/README.md
 ```
 
 EFB 本身的配置（bot token、管理员 ID、话题群等）按各组件自带的文档填写，见 [telegram-master/README.rst](telegram-master/README.rst) 和 [wechat-slave/README.rst](wechat-slave/README.rst)。
 
-启用群聊总结，要在 `~/.ehforwarderbot/profiles/default/config.yaml` 里加上中间件，并写好上一节的配置文件：
+启用群聊总结，要在 `~/.ehforwarderbot/profiles/default/config.yaml` 里加上中间件，并写好上面两节的配置文件：
 
 ```yaml
 middlewares:
+  - specialhua.ai
   - specialhua.summary
 ```
 

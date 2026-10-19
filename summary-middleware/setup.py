@@ -8,6 +8,7 @@ setup(
     python_requires='>=3.8',
     install_requires=[
         "ehforwarderbot>=2.0.0",
+        "efb-ai-middleware",
         "requests",
         "ruamel.yaml",
     ],

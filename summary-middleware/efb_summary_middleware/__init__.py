@@ -18,9 +18,11 @@ from ehforwarderbot.chat import SelfChatMember, SystemChatMember
 from ehforwarderbot.types import ModuleID, InstanceID
 from ehforwarderbot.utils import extra, get_config_path, get_data_path
 
+from efb_ai_middleware import Jev, Provider, config_path as ai_config_path, load_settings as load_ai_settings
+from efb_ai_middleware.jev import DEFAULT_BASE_URL as JEV_BASE_URL
+
 from . import render
 from .ask import Asker
-from .jev import DEFAULT_BASE_URL as JEV_BASE_URL, Jev
 from .labeler import MEDIA, TASKS, Labeler
 from .store import LabeledRow, Store
 from .summarizer import Summarizer
@@ -125,8 +127,9 @@ class SummaryMiddleware(Middleware):
         self.config_path = get_config_path(self.middleware_id)
         self.config_lock = threading.Lock()
         self.asker = Asker(self)
+        self.ai_config_path = ai_config_path()
         config = self.load_config()
-        self.config_mtime = self.config_path.stat().st_mtime
+        self.config_mtime = self.config_mtimes()
         self.apply_config(config)
 
         self.run_lock = threading.Lock()
@@ -143,10 +146,13 @@ class SummaryMiddleware(Middleware):
             raise FileNotFoundError("Config file of {} does not exist. ({})".format(self.middleware_id, path))
         with path.open(encoding="utf-8") as f:
             data = YAML(typ="safe").load(f) or {}
-        for key in ("base_url", "api_key", "model"):
-            if not isinstance(data.get(key), str) or not data[key]:
-                raise ValueError("{}: \"{}\" must be a non-empty string.".format(self.middleware_id, key))
-        data["ask"] = self.load_ask(data.get("ask"), data)
+        ai = load_ai_settings(self.ai_config_path)
+        data["connection"] = self.load_connection(data, "", ai)
+        data["model"] = data.get("model") or data["connection"].model
+        if not data["model"]:
+            raise ValueError("{}: \"model\" is set neither here nor for the service in {}.".format(
+                self.middleware_id, ai.path))
+        data["ask"] = self.load_ask(data.get("ask"), data, ai)
         # /ask works in every chat, so with it on no chat needs a summary.
         chats = data.get("chats")
         if chats is None:
@@ -156,10 +162,40 @@ class SummaryMiddleware(Middleware):
         if not isinstance(chats, list) or (not chats and data["ask"] is None):
             raise ValueError("{}: \"chats\" must list at least one chat name or ID.".format(self.middleware_id))
         data["chats"] = [self.load_target(i, data) for i in chats]
-        data["jev"] = self.load_jev(data.get("jev"))
+        data["jev"] = self.load_jev(data.get("jev"), ai)
         return data
 
-    def load_ask(self, entry: Any, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def config_mtimes(self) -> Tuple[Optional[float], Optional[float]]:
+        """When the own config and the shared AI config were last changed;
+        ``None`` for a missing file."""
+        times = []
+        for path in (self.config_path, self.ai_config_path):
+            try:
+                times.append(path.stat().st_mtime)
+            except OSError:
+                times.append(None)
+        return times[0], times[1]
+
+    def load_connection(self, entry: Dict[str, Any], where: str, ai: Any) -> Provider:
+        """The service to call for a section of the config: its own
+        ``base_url`` and ``api_key`` as written before the shared AI config
+        existed, or else the ``provider`` of the AI config, by default its
+        default one."""
+        for key in ("model", "provider"):
+            value = entry.get(key)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError("{}: \"{}{}\" must be a non-empty string.".format(self.middleware_id, where, key))
+        if entry.get("base_url") is None and entry.get("api_key") is None:
+            return ai.provider(entry.get("provider"))
+        if entry.get("provider") is not None:
+            raise ValueError("{0}: \"{1}provider\" can't be used together with \"{1}base_url\" and "
+                             "\"{1}api_key\".".format(self.middleware_id, where))
+        for key in ("base_url", "api_key"):
+            if not isinstance(entry.get(key), str) or not entry[key]:
+                raise ValueError("{}: \"{}{}\" must be a non-empty string.".format(self.middleware_id, where, key))
+        return Provider(self.middleware_id, entry["base_url"], entry["api_key"], None)
+
+    def load_ask(self, entry: Any, data: Dict[str, Any], ai: Any) -> Optional[Dict[str, Any]]:
         """Settings of ``/ask`` from the optional ``ask`` section; ``None``
         when it is turned off with ``ask: false``."""
         if entry is False:
@@ -168,30 +204,43 @@ class SummaryMiddleware(Middleware):
             entry = {}
         if not isinstance(entry, dict):
             raise ValueError("{}: \"ask\" must be a mapping or false.".format(self.middleware_id))
-        for key in ("model", "prompt"):
-            value = entry.get(key)
-            if value is not None and (not isinstance(value, str) or not value):
-                raise ValueError("{}: \"ask.{}\" must be a non-empty string.".format(self.middleware_id, key))
+        value = entry.get("prompt")
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError("{}: \"ask.prompt\" must be a non-empty string.".format(self.middleware_id))
+        # Without a service of its own, /ask goes to the one of the summaries.
+        own = any(entry.get(key) is not None for key in ("base_url", "api_key", "provider"))
+        connection = self.load_connection(entry, "ask.", ai) if own else data["connection"]
+        model = entry.get("model") or (connection.model if own else data["model"])
+        if not model:
+            raise ValueError("{}: \"ask.model\" is set neither here nor for the service in {}.".format(
+                self.middleware_id, ai.path))
         for key, default in (("max_chars", 150), ("timeout", 60)):
             value = entry.get(key, default)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                 raise ValueError("{}: \"ask.{}\" must be a positive number.".format(self.middleware_id, key))
         return {
-            "summarizer": Summarizer(base_url=data["base_url"], api_key=data["api_key"],
-                                     model=entry.get("model") or data["model"],
-                                     timeout=float(entry.get("timeout", 60))),
+            "summarizer": Summarizer(base_url=connection.base_url, api_key=connection.api_key,
+                                     model=model, timeout=float(entry.get("timeout", 60))),
             "max_chars": int(entry.get("max_chars", 150)),
             "prompt": entry.get("prompt") or "",
         }
 
-    def load_jev(self, entry: Any) -> Optional[Dict[str, Any]]:
+    def load_jev(self, entry: Any, ai: Any) -> Optional[Dict[str, Any]]:
         """Settings of labeling from the optional ``jev`` section: the
-        ``labeler``, and ``min_confidence`` and ``highlight``."""
-        if entry is None:
+        ``labeler``, and ``min_confidence`` and ``highlight``. Labeling is
+        on when the section has an ``api_key`` of its own, or Jev is set up
+        in the shared AI config and not turned off with ``jev: false``."""
+        if entry is False or (entry is None and ai.jev is None):
             return None
+        if entry is None or entry is True:
+            entry = {}
         if not isinstance(entry, dict):
-            raise ValueError("{}: \"jev\" must be a mapping.".format(self.middleware_id))
-        for key, required in (("api_key", True), ("model", False), ("base_url", False)):
+            raise ValueError("{}: \"jev\" must be a mapping or false.".format(self.middleware_id))
+        own = entry.get("api_key") is not None
+        if not own and ai.jev is None:
+            raise ValueError("{}: Jev needs an \"api_key\", in \"jev\" of {} or here.".format(
+                self.middleware_id, ai.path))
+        for key, required in (("api_key", own), ("model", False), ("base_url", False)):
             value = entry.get(key)
             if (required or value is not None) and (not isinstance(value, str) or not value):
                 raise ValueError("{}: \"jev.{}\" must be a non-empty string.".format(self.middleware_id, key))
@@ -203,7 +252,7 @@ class SummaryMiddleware(Middleware):
                     self.middleware_id, key, low, high))
             return value
 
-        timeout = number("timeout", 60, 0, float("inf"))
+        timeout = number("timeout", ai.jev.timeout if not own else 60, 0, float("inf"))
         min_confidence = number("min_confidence", 0.6, 0, 1)
         # 0 marks nothing; allowed although it is the open end of the range.
         highlight = entry.get("highlight", 0.2)
@@ -212,8 +261,15 @@ class SummaryMiddleware(Middleware):
         lang = entry.get("lang", "zh")
         if lang not in TASKS:
             raise ValueError("{}: \"jev.lang\" must be one of {}.".format(self.middleware_id, ", ".join(TASKS)))
-        jev = Jev(api_key=entry["api_key"], model=entry.get("model") or "jev-latest",
-                  base_url=entry.get("base_url") or JEV_BASE_URL, timeout=timeout)
+        if own:
+            jev = Jev(api_key=entry["api_key"], model=entry.get("model") or "jev-latest",
+                      base_url=entry.get("base_url") or JEV_BASE_URL, timeout=timeout)
+        else:
+            if entry.get("base_url") is not None:
+                raise ValueError("{}: \"jev.base_url\" goes with \"jev.api_key\"; the shared one is in "
+                                 "{}.".format(
+                    self.middleware_id, ai.path))
+            jev = ai.jev_client(model=entry.get("model"), timeout=timeout)
         return {"labeler": Labeler(jev, lang=lang), "min_confidence": min_confidence, "highlight": highlight}
 
     def load_target(self, entry: Any, defaults: Dict[str, Any]) -> Target:
@@ -254,8 +310,9 @@ class SummaryMiddleware(Middleware):
             # A restart must not reset the cycle, so the last run is persisted.
             if self.store.get_last_run(target.name) is None:
                 self.store.set_last_run(target.name, time.time())
+        connection: Provider = config['connection']
         self.summarizer = Summarizer(
-            base_url=config['base_url'], api_key=config['api_key'], model=config['model'],
+            base_url=connection.base_url, api_key=connection.api_key, model=config['model'],
             prompt=config.get('prompt') or "",
             max_chars=int(config.get('max_chars', 40000)),
             timeout=float(config.get('timeout', 180)))
@@ -271,11 +328,8 @@ class SummaryMiddleware(Middleware):
         """Pick up a changed config file. An invalid one is reported and the
         running config stays in place."""
         with self.config_lock:
-            try:
-                mtime = self.config_path.stat().st_mtime
-            except OSError:
-                return
-            if mtime == self.config_mtime:
+            mtime = self.config_mtimes()
+            if mtime[0] is None or mtime == self.config_mtime:
                 return
             self.config_mtime = mtime
             try:

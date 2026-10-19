@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import AbstractSet, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
-from .jev import Jev
+from efb_ai_middleware import Jev
 
 LabelRow = Tuple[int, float, str, str]
 """(message ID in the store, timestamp, author, content)"""
