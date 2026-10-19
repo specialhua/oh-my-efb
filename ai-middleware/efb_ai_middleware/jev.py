@@ -7,6 +7,8 @@ from typing import Any, Dict, Tuple
 
 import requests
 
+from .chat import post
+
 DEFAULT_BASE_URL = "https://api.typesafe.ai/v1"
 
 
@@ -60,13 +62,5 @@ class Jev:
 
     def post(self, payload: dict) -> Tuple[int, bytes]:
         """POST to the endpoint and read the whole response within ``timeout``
-        seconds, the same way as :meth:`Summarizer.post`."""
-        deadline = time.monotonic() + self.timeout
-        with requests.post(self.url, headers={"Authorization": "Bearer " + self.api_key},
-                           json=payload, timeout=self.timeout, stream=True) as resp:
-            body = bytearray()
-            for chunk in resp.iter_content(8192):
-                body += chunk
-                if time.monotonic() > deadline:
-                    raise TimeoutError("no complete response in {:g} s".format(self.timeout))
-            return resp.status_code, bytes(body)
+        seconds, the same way as :meth:`.ChatClient.post`."""
+        return post(self.url, self.api_key, payload, self.timeout)

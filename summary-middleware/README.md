@@ -8,8 +8,11 @@ EFB 中间件：记录指定群聊的消息，每 X 天把最近 Y 天、最多 
 
 ## 启用
 
+依赖 [AI 中间件](../ai-middleware/README.md)（`specialhua.ai`），要先装它：
+
 ```bash
 source ~/efb-venv/bin/activate
+pip install -e ~/oh-my-efb/ai-middleware
 pip install -e ~/oh-my-efb/summary-middleware
 ```
 
@@ -17,17 +20,21 @@ pip install -e ~/oh-my-efb/summary-middleware
 
 ```yaml
 middlewares:
+  - specialhua.ai        # 可选，见 AI 中间件的说明
   - specialhua.summary
 ```
 
 ## 配置
 
-`~/.ehforwarderbot/profiles/default/specialhua.summary/config.yaml`，含 API key，权限设为 600：
+接口地址、API key 和 Jev 的 key 写在 AI 中间件的配置里（`specialhua.ai/config.yaml`，见[它的说明](../ai-middleware/README.md#配置)），这里只写总结自己的设置。
+
+`~/.ehforwarderbot/profiles/default/specialhua.summary/config.yaml`：
 
 ```yaml
-base_url: https://example.com/v1   # 写到 /v1 为止，会自动拼上 /chat/completions
-api_key: sk-xxxx
-model: gpt-4o-mini
+# 以下三项都可选
+# provider: vision     # 用 AI 中间件里的哪个服务，默认是它的默认服务
+# model: gpt-4o-mini   # 换一个模型，默认用该服务的 model
+# base_url / api_key   # 旧写法：直接写在这里也照常可用，此时不读 AI 中间件的服务，也不能再写 provider
 
 # 默认值，对下面所有群生效
 interval_days: 3       # X：每 X 天自动汇总一次
@@ -50,31 +57,32 @@ chats:                 # 要总结的群：群名、备注名或 chat ID，任�
 # max_chars: 40000     # 单次请求的聊天记录字符上限，超出则分段总结再合并
 # timeout: 180         # 单次请求超时（秒）
 
-# ask:                 # 可选：/ask 默认开启，沿用上面的 base_url、api_key、model
+# ask:                 # 可选：/ask 默认开启，沿用上面的服务和模型
 #   max_chars: 150     # 回答最多多少字；需要展开的问题会尽量用足，简单问题仍会简短
+#   provider: vision   # 单独换一个服务（比如能识图的），模型默认用该服务的 model
 #   model: gpt-4o-mini # 单独换一个模型
 #   prompt: |          # 覆盖内置提示词，其中的 {max_chars} 会换成上面的字数
 #     ...
 #   timeout: 60        # 单次请求超时（秒）
 # ask: false           # 关闭 /ask，此时 /ask 会当成普通消息发出去
 
-# jev:                 # 可选：用 TypeSafe 的 Jev 给消息分类，总结前筛掉无用消息，见下文“行为”
-#   api_key: ts-xxxx
-#   model: jev-latest  # 默认 jev-latest；也可以写 jev-preview 或具体版本
-#   # lang: zh         # 问 Jev 的问题用中文（zh）还是英文（en）
-#   # min_confidence: 0.6  # 附和/闲聊/广告要有多大把握才筛掉
-#   # highlight: 0.2   # 每次总结里把最值得提的前百分之多少标 ★，0 为不标
-#   # base_url: https://api.typesafe.ai/v1
-#   # timeout: 60
+# jev:                 # 用 Jev 给消息分类，总结前筛掉无用消息，见下文“行为”。AI 中间件配了 jev 就自动开启
+#   model: jev-latest  # 默认用 AI 中间件里的；也可以写 jev-preview 或具体版本
+#   lang: zh           # 问 Jev 的问题用中文（zh）还是英文（en）
+#   min_confidence: 0.6  # 附和/闲聊/广告要有多大把握才筛掉
+#   highlight: 0.2     # 每次总结里把最值得提的前百分之多少标 ★，0 为不标
+#   timeout: 60
+#   # api_key、base_url：旧写法，直接写在这里也照常可用
+# jev: false           # AI 中间件配了 jev 但总结不想用时，写这一行关闭
 ```
 
-只用 `/ask` 不需要总结时，`chats` 可以不写。每个群必须有 `interval_days`，并且 `lookback_days` 和 `max_messages` 至少有一个（来自默认值或自己的设置都算）。没有配置文件或这些条件不满足时，EFB 会在启动时直接报错退出。
+只用 `/ask` 不需要总结时，`chats` 可以不写。每个群必须有 `interval_days`，并且 `lookback_days` 和 `max_messages` 至少有一个（来自默认值或自己的设置都算）。没有配置文件、找不到可用的服务或这些条件不满足时，EFB 会在启动时直接报错退出。
 
-配置文件改动后不用重启：中间件每分钟检查一次文件是否变化，手动触发汇总前也会检查，变了就重新读取，所有配置项（包括增减群）都即时生效。新文件有错误时会发消息告知原因，并继续使用之前的配置。
+配置文件（包括 AI 中间件的配置文件）改动后不用重启：中间件每分钟检查一次文件是否变化，手动触发汇总前也会检查，变了就重新读取，所有配置项（包括增减群）都即时生效。新文件有错误时会发消息告知原因，并继续使用之前的配置。
 
 ### 用 Jev 试标消息
 
-配好 `jev` 之后，中间件就会自动分类、在总结时使用（见“行为”）。也可以先离线看看 [Jev](https://docs.typesafe.ai/introduction) 给已记录的消息分类分得准不准，再决定是否用于总结。脚本只读数据库，EFB 不用停：
+配好 Jev 之后，中间件就会自动分类、在总结时使用（见“行为”）。也可以先离线看看 [Jev](https://docs.typesafe.ai/introduction) 给已记录的消息分类分得准不准，再决定是否用于总结。脚本只读数据库，EFB 不用停：
 
 ```bash
 ~/efb-venv/bin/python -m efb_summary_middleware.jev_trial                       # 列出库里的群
@@ -110,7 +118,7 @@ chats:                 # 要总结的群：群名、备注名或 chat ID，任�
 
 说明：Telegram 的 bot 不能冒充你在 Telegram 里发消息，所以 Telegram 里看到的始终是 bot 那条审核消息；“以你的名义”指的是在微信里由你的账号发出，和你在 Telegram 里直接打字发到微信是同一个效果。
 
-问题、群名和被引用的消息（包括图片）会发送给 `base_url` 指向的服务。
+问题、群名和被引用的消息（包括图片）会发送给所用的服务。
 
 ## 行为
 
@@ -127,11 +135,11 @@ chats:                 # 要总结的群：群名、备注名或 chat ID，任�
 - **输出**：一条 Telegram 消息；超过长度上限时消息只放前半部分，完整版作为 `.html` 附件跟在后面。
 - **失败**：单次请求自动重试 3 次；定时汇总失败后每小时再试一次，只在第一次失败时通知。
 - **非文本消息**：记为 `[图片]`、`[语音]` 等占位；链接保留标题、描述和地址。
-- **用 Jev 筛选**（配了 `jev` 时）：后台每分钟给新消息分类，一条消息要等后面来了 5 条，或者过了 10 分钟才分，这样能结合前后文判断；汇总前会把剩下的也分完。总结时：
+- **用 Jev 筛选**（配了 Jev 且没写 `jev: false` 时）：后台每分钟给新消息分类，一条消息要等后面来了 5 条，或者过了 10 分钟才分，这样能结合前后文判断；汇总前会把剩下的也分完。总结时：
   - 省略只有图片、表情等占位的消息，有把握的附和、闲聊、广告，以及重复出现的长消息（15 字以上），记录开头注明省略了多少，标题下的统计显示“筛掉 N”
   - 剩下的消息标上〔安排〕〔提问〕〔回答〕〔信息〕，其中最值得提的前 `highlight` 标 ★，并在提示词里说明这些标记，让模型优先覆盖
   - Jev 出错时，没分类的消息照常进入总结，只是不筛选；连续出错只通知一次
   - 刚启用时，库里已有的消息会分几轮补完，每轮每个群最多 300 条。费用按输入计，每 1000 条消息约 $0.04
 - **数据**：消息存在同目录的 `messages.db`，每次汇总后清理。默认设了 `lookback_days` 的群保留 `lookback_days + 7` 天，只设 `max_messages` 的群保留最新的 `max_messages` 条。`/summary 30` 这类命令只能汇总到还保留着的消息，想回看得更久就设 `retention_days`，设了之后一律按这个天数保留。只有启用之后收到的消息才会被记录。
 
-聊天记录会原文发送给 `base_url` 指向的服务。
+聊天记录会原文发送给所用的服务。

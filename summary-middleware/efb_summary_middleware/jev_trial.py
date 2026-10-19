@@ -21,7 +21,9 @@ from ruamel.yaml import YAML
 
 from ehforwarderbot.utils import get_base_path
 
-from .jev import DEFAULT_BASE_URL, Jev
+from efb_ai_middleware import Jev, config_path as ai_config_path, load_settings as load_ai_settings
+from efb_ai_middleware.jev import DEFAULT_BASE_URL
+
 from .labeler import CATEGORIES, MEDIA, Label, Labeler, LabelRow
 
 MODULE_ID = "specialhua.summary"
@@ -56,10 +58,15 @@ def main():
     with (folder / "config.yaml").open(encoding="utf-8") as f:
         config = YAML(typ="safe").load(f) or {}
     section = config.get("jev")
-    if not isinstance(section, dict) or not section.get("api_key"):
-        sys.exit("No jev.api_key in {}".format(folder / "config.yaml"))
-    jev = Jev(api_key=section["api_key"], model=args.model or section.get("model") or "jev-latest",
-              base_url=section.get("base_url") or DEFAULT_BASE_URL, timeout=float(section.get("timeout", 60)))
+    section = section if isinstance(section, dict) else {}
+    if section.get("api_key"):
+        jev = Jev(api_key=section["api_key"], model=args.model or section.get("model") or "jev-latest",
+                  base_url=section.get("base_url") or DEFAULT_BASE_URL, timeout=float(section.get("timeout", 60)))
+    else:
+        ai_path = ai_config_path(args.profile)
+        jev = load_ai_settings(ai_path).jev_client(model=args.model or section.get("model"))  # type: ignore[assignment]
+        if jev is None:
+            sys.exit("No jev.api_key in {} or {}".format(ai_path, folder / "config.yaml"))
 
     db = sqlite3.connect("file:{}?mode=ro".format(folder / "messages.db"), uri=True)
     if not args.chat:
