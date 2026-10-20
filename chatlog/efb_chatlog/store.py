@@ -159,4 +159,7 @@ def get_meta(db: sqlite3.Connection, key: str) -> Optional[str]:
 
 
 def set_meta(db: sqlite3.Connection, key: str, value: str):
-    db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+    """Save a value; an unchanged one is not written again."""
+    db.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+               "ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE value IS NOT excluded.value",
+               (key, value))

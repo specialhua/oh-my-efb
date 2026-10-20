@@ -115,6 +115,11 @@ class MsgLog(BaseModel):
     time = DateTimeField(default=datetime.datetime.now, null=True)
     """Time of the message sent."""
 
+    class Meta:
+        # For the latest message of a chat, e.g. to sort the chat list;
+        # created on existing databases by ``_create_missing_tables``.
+        indexes = ((("slave_origin_uid", "time"), False),)
+
     def build_etm_msg(self, chat_manager: ChatObjectCacheManager,
                       recur: bool = True) -> ETMMsg:
         c_module, c_id, _ = chat_id_str_to_id(self.slave_origin_uid)

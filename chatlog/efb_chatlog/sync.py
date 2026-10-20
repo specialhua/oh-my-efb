@@ -149,19 +149,26 @@ class Syncer:
         return (master_msg_id, origin, member, self.timestamp(time), msg_type, text, link_text,
                 int(outgoing), file_id, mime, bot_id, json.dumps(extra, ensure_ascii=False) if extra else None)
 
+    UPSERT = ("INSERT INTO messages (master_msg_id, chat_key, sender_key, ts, type, text, link_text, outgoing, "
+              "file_id, mime, bot_id, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+              "ON CONFLICT (master_msg_id) DO UPDATE SET chat_key = excluded.chat_key, "
+              "sender_key = excluded.sender_key, type = excluded.type, text = excluded.text, "
+              "link_text = excluded.link_text, file_id = excluded.file_id, mime = excluded.mime, "
+              "bot_id = excluded.bot_id, extra = excluded.extra "
+              "WHERE messages.text IS NOT excluded.text OR messages.file_id IS NOT excluded.file_id "
+              "OR messages.extra IS NOT excluded.extra OR messages.type IS NOT excluded.type")
+
     def upsert(self, rows: List[tuple]) -> Set[str]:
-        """Save converted rows; returns the chats touched."""
-        self.db.executemany(
-            "INSERT INTO messages (master_msg_id, chat_key, sender_key, ts, type, text, link_text, outgoing, "
-            "file_id, mime, bot_id, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (master_msg_id) DO UPDATE SET chat_key = excluded.chat_key, "
-            "sender_key = excluded.sender_key, type = excluded.type, text = excluded.text, "
-            "link_text = excluded.link_text, file_id = excluded.file_id, mime = excluded.mime, "
-            "bot_id = excluded.bot_id, extra = excluded.extra "
-            "WHERE messages.text IS NOT excluded.text OR messages.file_id IS NOT excluded.file_id "
-            "OR messages.extra IS NOT excluded.extra OR messages.type IS NOT excluded.type",
-            rows)
-        return {i[1] for i in rows}
+        """Save converted rows; returns the chats of those added or changed.
+        Rows copied again unchanged (see :attr:`tail`) touch no chat, so
+        their stats are not counted again."""
+        touched = set()
+        for row in rows:
+            changes = self.db.total_changes
+            self.db.execute(self.UPSERT, row)
+            if self.db.total_changes != changes:
+                touched.add(row[1])
+        return touched
 
     STATS = ("INSERT OR REPLACE INTO chats (key, count, first_ts, last_ts, senders, hint, last_tg) "
              "SELECT chat_key, count(*), min(ts), max(ts), count(DISTINCT sender_key), "

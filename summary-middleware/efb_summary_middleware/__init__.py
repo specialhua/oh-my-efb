@@ -135,6 +135,8 @@ class SummaryMiddleware(Middleware):
         self.run_lock = threading.Lock()
         self.label_lock = threading.Lock()
         self.label_failing = False
+        self.label_failures = 0
+        self.label_retry_at = 0.0
         self.stop_event = threading.Event()
         atexit.register(self.stop_event.set)
         threading.Thread(target=self.schedule_loop, name="summary schedule", daemon=True).start()
@@ -430,6 +432,8 @@ class SummaryMiddleware(Middleware):
 
     def label_loop(self):
         while not self.stop_event.wait(self.poll_seconds):
+            if time.time() < self.label_retry_at:
+                continue
             for target in self.targets:
                 if self.stop_event.is_set():
                     return
@@ -443,9 +447,15 @@ class SummaryMiddleware(Middleware):
                         self.report("⚠️ Jev 给 <b>{}</b> 的消息分类失败，总结会照常进行，只是不做筛选：{}".format(
                             html.escape(target.name), html.escape(str(e)[:500])))
                     self.label_failing = True
+                    # Wait longer after each failure, up to retry_seconds, so
+                    # that Jev is not asked again every minute while it fails.
+                    self.label_failures += 1
+                    self.label_retry_at = time.time() + min(
+                        self.retry_seconds, self.poll_seconds * 2 ** self.label_failures)
                     break
             else:
                 self.label_failing = False
+                self.label_failures = 0
 
     def label_target(self, target: Target, final: bool = False):
         """Label the messages of a chat that have settled, see

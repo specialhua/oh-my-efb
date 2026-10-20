@@ -210,7 +210,7 @@ class ETMChatMixin(ETMBaseChatMixin, Chat, ABC):
         """
         now = time.time()
         if self._last_message_time is None or \
-                now - self._last_message_time_query < self.LAST_MESSAGE_QUERY_TIMEOUT_MS:
+                (now - self._last_message_time_query) * 1000 > self.LAST_MESSAGE_QUERY_TIMEOUT_MS:
             msg_log = self.db.get_last_message(slave_chat_id=utils.chat_id_to_str(chat=self))
             self._last_message_time_query = now
             if msg_log is None:
