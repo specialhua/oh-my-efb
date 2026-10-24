@@ -417,6 +417,10 @@ msgstr "[消息类型不支持，请转到手机微信查看]"
 msgid "Via {source}"
 msgstr "发送自 {source}"
 
+#, python-brace-format
+msgid "[Channels] {nickname}"
+msgstr "[视频号] {nickname}"
+
 #: efb_wechat_slave/slave_message.py:405
 msgid "[Failed to download the picture, please check your phone.]"
 msgstr "[图片无法接收，请转到手机微信查看]"
