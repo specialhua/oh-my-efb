@@ -279,13 +279,17 @@ class SlaveMessageManager:
                         des = self.get_node_text(xml, './appmsg/title', "")
                         url = self.get_node_text(xml, './appmsg/url', "")
                         return self.wechat_shared_link_msg(msg, source, title, des, url)
+                    elif appmsg_type == '51':  # WeChat Channels (视频号) post
+                        return self.wechat_channels_msg(msg, xml)
                     elif appmsg_type == '1':  # Strange “app message” that looks like a text link
                         msg.raw['text'] = self.get_node_text(xml, './appmsg/title', "")
                         return self.wechat_text_msg(msg)
                     else:
                         # Unidentified message type
-                        self.logger.error("[%s] Identified unsupported sharing message type. Raw message: %s",
-                                          msg.id, msg.raw)
+                        # Log only the XML content: msg.raw carries the whole chat object,
+                        # including every group member, which floods the log.
+                        self.logger.warning("[%s] Unsupported sharing message type %r. Content: %s",
+                                            msg.id, appmsg_type, msg.raw.get('Content'))
                         raise KeyError()
                 except (TypeError, KeyError, ValueError, ETree.ParseError):
                     return self.wechat_unsupported_msg(msg)
@@ -294,6 +298,16 @@ class SlaveMessageManager:
 
         for i in links:
             self.wechat_raw_link_msg(msg, i.title, i.summary, i.cover, i.url)
+
+    def wechat_channels_msg(self, msg: wxpy.Message, xml: Element) -> Message:
+        feed = xml.find('./appmsg/finderFeed')
+        if feed is None:
+            raise KeyError()
+        nickname = self.get_node_text(feed, './nickname', "")
+        desc = self.get_node_text(feed, './desc', "")
+        title = self._("[Channels] {nickname}").format(nickname=nickname)
+        # Channels posts carry no web link, so this is delivered as a text message.
+        return self.wechat_raw_link_msg(msg, title, desc, "", "")
 
     @Decorators.wechat_msg_meta
     def wechat_unsupported_msg(self, msg: wxpy.Message) -> Message:

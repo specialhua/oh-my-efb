@@ -2,6 +2,7 @@ import logging
 import mimetypes
 import os
 import tempfile
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Dict, Any, BinaryIO
 
@@ -22,7 +23,7 @@ from .msg_type import TGMsgType
 if TYPE_CHECKING:
     pass
 
-logger = logging.Logger(__name__)
+logger = logging.getLogger(__name__)
 
 FILE_DOWNLOAD_TIMEOUT = 120
 
@@ -61,6 +62,16 @@ class ETMMsg(Message):
         self.file_id = file_id
 
     def _load_file(self):
+        try:
+            self._download_file()
+        except (telegram.error.NetworkError, FutureTimeoutError):
+            # Give up on this file instead of retrying the download on every
+            # later access to ``file``/``path``/``filename``, e.g. when the failed
+            # message is logged and cleaned up.
+            self.__initialized = True
+            raise
+
+    def _download_file(self):
         if self.file_id:
             # noinspection PyUnresolvedReferences
             bot_manager = coordinator.master.bot_manager
@@ -97,10 +108,14 @@ class ETMMsg(Message):
                 ext = mimetypes.guess_extension(self.mime, strict=False)
                 mime = self.mime
             file = tempfile.NamedTemporaryFile(suffix=ext)
-            bot_manager._runtime.call(
-                file_meta.download_to_memory(out=file),
-                timeout=FILE_DOWNLOAD_TIMEOUT,
-            )
+            try:
+                bot_manager._runtime.call(
+                    file_meta.download_to_memory(out=file),
+                    timeout=FILE_DOWNLOAD_TIMEOUT,
+                )
+            except BaseException:
+                file.close()
+                raise
             file.seek(0)
 
             if not mime:
