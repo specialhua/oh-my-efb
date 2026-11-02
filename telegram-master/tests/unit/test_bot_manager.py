@@ -1270,3 +1270,115 @@ def test_handle_delayed_database_update_stores_timestamp():
     entry = mgr._completed_delayed_results["task-2"]
     assert len(entry) == 3
     assert entry[2] == 55.0  # completed_at timestamp
+
+
+# --- Network failures in delayed sends must not duplicate messages ---
+
+def _timed_out_from(cause: BaseException) -> telegram.error.TimedOut:
+    try:
+        raise telegram.error.TimedOut() from cause
+    except telegram.error.TimedOut as e:
+        return e
+
+
+def _harvest_failed_send(exc: BaseException, attempts: int = 0):
+    from concurrent.futures import Future
+    from efb_telegram_master.bot_manager import DelayedTask
+
+    def send_video():
+        pass
+
+    task = DelayedTask(
+        execute_time=0.0, chat_id=100, function=send_video,
+        args=(), kwargs={}, task_id="t1", attempts=attempts,
+    )
+    future = Future()
+    future.set_exception(exc)
+    mgr = SimpleNamespace(
+        _chat_in_flight={100: (future, task, None)},
+        logger=Mock(),
+        _requeue_delayed_task=Mock(),
+    )
+    TelegramBotManager._harvest_completed_sends(mgr)
+    assert mgr._chat_in_flight == {}
+    return mgr
+
+
+def test_harvest_does_not_resend_after_read_timeout():
+    """A read timeout means Telegram may have posted the message already."""
+    import httpx
+
+    mgr = _harvest_failed_send(_timed_out_from(httpx.ReadTimeout("timed out")))
+
+    mgr._requeue_delayed_task.assert_not_called()
+    mgr.logger.warning.assert_called_once()
+
+
+def test_harvest_does_not_resend_after_connection_dropped_mid_response():
+    import httpx
+
+    exc = telegram.error.NetworkError("httpx.RemoteProtocolError: Server disconnected")
+    exc.__cause__ = httpx.RemoteProtocolError("Server disconnected")
+    mgr = _harvest_failed_send(exc)
+
+    mgr._requeue_delayed_task.assert_not_called()
+
+
+@pytest.mark.parametrize("cause", ["connect_timeout", "connect_error", "pool_timeout", "write_timeout"])
+def test_harvest_retries_when_request_never_reached_telegram(cause):
+    import httpx
+
+    errors = {
+        "connect_timeout": lambda: _timed_out_from(httpx.ConnectTimeout("timed out")),
+        "pool_timeout": lambda: _timed_out_from(httpx.PoolTimeout("timed out")),
+        "write_timeout": lambda: _timed_out_from(httpx.WriteTimeout("timed out")),
+        "connect_error": lambda: telegram.error.NetworkError("httpx.ConnectError: refused"),
+    }
+    exc = errors[cause]()
+    if cause == "connect_error":
+        exc.__cause__ = httpx.ConnectError("refused")
+
+    mgr = _harvest_failed_send(exc, attempts=2)
+
+    mgr._requeue_delayed_task.assert_called_once()
+    retried_task, delay = mgr._requeue_delayed_task.call_args.args
+    assert retried_task.attempts == 3
+    assert delay == 4.0
+
+
+def test_harvest_gives_up_after_max_retries():
+    import httpx
+    from efb_telegram_master.bot_manager import MAX_DELAYED_SEND_RETRIES
+
+    mgr = _harvest_failed_send(
+        _timed_out_from(httpx.ConnectTimeout("timed out")),
+        attempts=MAX_DELAYED_SEND_RETRIES,
+    )
+
+    mgr._requeue_delayed_task.assert_not_called()
+    mgr.logger.error.assert_called_once()
+
+
+def test_retry_on_timeout_filter_skips_ambiguous_timeouts():
+    import httpx
+
+    assert TelegramBotManager.Decorators.exception_filter(
+        _timed_out_from(httpx.ConnectTimeout("timed out")))
+    assert not TelegramBotManager.Decorators.exception_filter(
+        _timed_out_from(httpx.ReadTimeout("timed out")))
+
+
+def test_media_upload_uses_longer_read_timeout():
+    manager = SimpleNamespace(_media_read_timeout=90.0)
+    received = {}
+
+    def send_video(self, *args, **kwargs):
+        received.update(kwargs)
+
+    wrapped = TelegramBotManager.Decorators.media_upload_timeout(send_video)
+    wrapped(manager, 100, b"video")
+    assert received["read_timeout"] == 90.0
+
+    received.clear()
+    wrapped(manager, 100, b"video", read_timeout=5)
+    assert received["read_timeout"] == 5

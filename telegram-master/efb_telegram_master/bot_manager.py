@@ -18,6 +18,7 @@ from urllib.parse import quote, urlparse, urlunparse
 from urllib.request import url2pathname
 from unittest.mock import Mock, patch
 
+import httpx
 import telegram.constants
 import telegram.error
 from retrying import retry
@@ -45,6 +46,40 @@ class DelayedTask(NamedTuple):
     task_id: str       # Unique task identifier
     arrival_seq: int = 0  # Monotonic arrival order; preserved across requeues
     cleanup_files: list = []  # Files to delete after task completes
+    attempts: int = 0  # Retries already spent on transient network errors
+
+
+# Retries for a delayed send whose request never reached Telegram.
+MAX_DELAYED_SEND_RETRIES = 5
+# Media uploads need Telegram to receive and process the file before it answers,
+# which often takes longer than the default read timeout.
+MIN_MEDIA_READ_TIMEOUT = 60.0
+# httpx errors that mean the request was not (fully) sent, so Telegram cannot have
+# acted on it and resending cannot produce a duplicate message.
+_UNSENT_REQUEST_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.WriteError,
+    httpx.WriteTimeout,
+)
+
+
+def _request_never_reached_telegram(exc: BaseException) -> bool:
+    """Whether a failed request certainly was not received by Telegram.
+
+    PTB wraps httpx errors (``raise TimedOut from err``), so look through the
+    cause chain. A read timeout or a dropped connection after the request was
+    sent is ambiguous: Telegram may already have posted the message.
+    """
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _UNSENT_REQUEST_ERRORS):
+            return True
+        current = current.__cause__
+    return False
 
 if TYPE_CHECKING:
     from . import TelegramChannel
@@ -419,16 +454,31 @@ class TelegramBotManager(LocaleMixin):
         @classmethod
         def exception_filter(cls, exception: Exception):
             cls.logger.exception("Exception: %s while sending request to Telegram server.", exception)
-            return isinstance(exception, telegram.error.TimedOut)
+            # Only resend when Telegram never got the request; otherwise a slow
+            # reply would turn into duplicated messages.
+            return (isinstance(exception, telegram.error.TimedOut)
+                    and _request_never_reached_telegram(exception))
 
         @classmethod
         def retry_on_timeout(cls, fn: Callable):
-            """Infinitely retry for timed-out exceptions."""
+            """Retry timed-out requests that never reached Telegram."""
             if not cls.enable_retry:
                 return fn
-            cls.logger.debug("Trying to call %s with infinite retry.", fn)
+            cls.logger.debug("Trying to call %s with retry on timeout.", fn)
             return retry(wait_exponential_multiplier=1e3, wait_exponential_max=180e3,
+                         stop_max_attempt_number=MAX_DELAYED_SEND_RETRIES + 1,
                          retry_on_exception=cls.exception_filter)(fn)
+
+        @classmethod
+        def media_upload_timeout(cls, fn: Callable):
+            """Give file uploads a longer read timeout than ordinary requests."""
+            @wraps(fn)
+            def media_upload_timeout_wrapper(self: 'TelegramBotManager', *args, **kwargs):
+                if kwargs.get('read_timeout') is None:
+                    kwargs['read_timeout'] = getattr(self, '_media_read_timeout', MIN_MEDIA_READ_TIMEOUT)
+                return fn(self, *args, **kwargs)
+
+            return media_upload_timeout_wrapper
 
         @classmethod
         def rate_limit_decorator(cls, fn: Callable):
@@ -805,6 +855,11 @@ class TelegramBotManager(LocaleMixin):
             req_kwargs.update(conf_req_kwargs)
         request_kwargs = self._normalize_request_kwargs(req_kwargs)
         self._request_kwargs = dict(request_kwargs)
+        configured_read_timeout = request_kwargs.get('read_timeout')
+        self._media_read_timeout = max(
+            float(configured_read_timeout) if isinstance(configured_read_timeout, (int, float)) else 0.0,
+            MIN_MEDIA_READ_TIMEOUT,
+        )
         self._bot_identity_kwargs: dict[str, str] = {"token": config['token']}
         self._logged_custom_emoji_affix_ids: set[str] = set()
 
@@ -1696,12 +1751,32 @@ class TelegramBotManager(LocaleMixin):
                 )
 
             except (telegram.error.TimedOut, telegram.error.NetworkError) as e:
-                should_cleanup = False
-                self.logger.warning(
-                    "Transient error for delayed task %s, retrying: %s",
-                    task.task_id, e,
-                )
-                self._requeue_delayed_task(task, 1.0)
+                method = getattr(task.function, "__name__", repr(task.function))
+                if not _request_never_reached_telegram(e):
+                    # The request was sent; Telegram may well have posted the
+                    # message and only the reply was lost. Resending here is what
+                    # used to turn one slow video upload into a dozen copies.
+                    self.logger.warning(
+                        "Delayed task %s (%s, chat_id=%s) failed after the request was sent: %r "
+                        "(cause: %r). Telegram may have delivered it already; not retrying "
+                        "to avoid duplicates.",
+                        task.task_id, method, task.chat_id, e, e.__cause__,
+                    )
+                elif task.attempts >= MAX_DELAYED_SEND_RETRIES:
+                    self.logger.error(
+                        "Delayed task %s (%s, chat_id=%s) still failing after %d retries, dropping: %r",
+                        task.task_id, method, task.chat_id, task.attempts, e,
+                    )
+                else:
+                    should_cleanup = False
+                    delay = float(min(2 ** task.attempts, 30))
+                    self.logger.warning(
+                        "Request for delayed task %s (%s) did not reach Telegram (%r); "
+                        "retry %d/%d in %.0fs",
+                        task.task_id, method, e.__cause__ or e,
+                        task.attempts + 1, MAX_DELAYED_SEND_RETRIES, delay,
+                    )
+                    self._requeue_delayed_task(task._replace(attempts=task.attempts + 1), delay)
 
             except telegram.error.Forbidden as e:
                 if sender_bot_id and self.bot_pool:
@@ -2112,6 +2187,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.handle_rate_limit_error
     @Decorators.caption_affix_decorator
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_audio(self, *args, **kwargs):
         """
         Send an audio file.
@@ -2138,6 +2214,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.handle_rate_limit_error
     @Decorators.caption_affix_decorator
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_voice(self, *args, **kwargs):
         """
         Send an voice message.
@@ -2164,6 +2241,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.handle_rate_limit_error
     @Decorators.caption_affix_decorator
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_video(self, *args, **kwargs):
         """
         Send an voice message.
@@ -2190,6 +2268,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.handle_rate_limit_error
     @Decorators.caption_affix_decorator
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_document(self, *args, **kwargs):
         """
         Send a document.
@@ -2211,6 +2290,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.handle_rate_limit_error
     @Decorators.caption_affix_decorator
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_animation(self, *args, **kwargs):
         """
         Send a document.
@@ -2232,6 +2312,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.handle_rate_limit_error
     @Decorators.caption_affix_decorator
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_photo(self, *args, **kwargs):
         """
         Send a document.
@@ -2285,6 +2366,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.retry_on_timeout
     @Decorators.handle_rate_limit_error
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def send_sticker(self, *args, **kwargs):
         return self._active_bot.send_sticker(*args, **kwargs)
 
@@ -2328,6 +2410,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.rate_limit_decorator
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
+    @Decorators.media_upload_timeout
     def edit_message_media(self, *args, **kwargs):
         return self._active_bot.edit_message_media(*args, **kwargs)
 
