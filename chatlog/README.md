@@ -2,6 +2,44 @@
 
 把 EFB 转发过的所有消息做成一个可以搜索的网页：微信那边收到的，加上你从 Telegram 发回微信的。登录不用密码，只有登记过的设备能打开，打开时用指纹或面容（通行密钥 / WebAuthn）验证一下。
 
+## 截图
+
+截图里的会话、消息和设备都是虚构的示例数据。
+
+![按会话浏览：左边是全部会话，右边是选中会话的消息](screenshots/chat.webp)
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/search.webp" alt="全部聊天里按发送人搜索"></td>
+    <td width="50%"><img src="screenshots/chat-dark.webp" alt="深色模式"></td>
+  </tr>
+  <tr>
+    <td align="center">全局搜索，<code>from:妈妈</code> 按发送人筛选</td>
+    <td align="center">深色模式，跟随系统切换</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="screenshots/login.webp" alt="通行密钥登录页"></td>
+    <td width="50%"><img src="screenshots/devices.webp" alt="受信设备管理"></td>
+  </tr>
+  <tr>
+    <td align="center">登录页，用指纹或面容验证</td>
+    <td align="center">受信设备，随时移除</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="33%"><img src="screenshots/mobile-list.webp" alt="手机上的会话列表"></td>
+    <td width="33%"><img src="screenshots/mobile-chat.webp" alt="手机上打开会话"></td>
+    <td width="33%"><img src="screenshots/mobile-chat-dark.webp" alt="手机深色模式"></td>
+  </tr>
+  <tr>
+    <td align="center">手机：会话列表</td>
+    <td align="center">手机：打开会话</td>
+    <td align="center">手机：深色模式</td>
+  </tr>
+</table>
+
 ## 组成
 
 | 部分 | 跑在哪 | 做什么 |

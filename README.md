@@ -65,7 +65,18 @@ model: deepseek-chat
 - 消息来自 Telegram 主端的 `tgdata.db`，能导入全部历史。网页服务单独跑，后台增量同步。
 - 配套的 `specialhua.chatlog` 中间件只记会话名和发言人名，补上 `tgdata.db` 缺的名字。
 
-部署和使用见 [chatlog/README.md](chatlog/README.md)。
+![聊天记录网页：按会话浏览](chatlog/screenshots/chat.webp)
+
+<table>
+  <tr>
+    <td width="40%" valign="top"><img src="chatlog/screenshots/search.webp" alt="全局搜索"><br><br><img src="chatlog/screenshots/chat-dark.webp" alt="深色模式"></td>
+    <td width="20%"><img src="chatlog/screenshots/mobile-list.webp" alt="手机上的会话列表"></td>
+    <td width="20%"><img src="chatlog/screenshots/mobile-chat.webp" alt="手机上打开会话"></td>
+    <td width="20%"><img src="chatlog/screenshots/mobile-chat-dark.webp" alt="手机深色模式"></td>
+  </tr>
+</table>
+
+截图里是虚构的示例数据，更多截图、部署和使用见 [chatlog/README.md](chatlog/README.md)。
 
 ### `/extra` 支持中间件的命令
 
