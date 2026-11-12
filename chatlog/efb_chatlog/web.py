@@ -24,6 +24,9 @@ from .sync import Syncer
 logger = logging.getLogger(__name__)
 
 PAGE = Path(__file__).with_name("static") / "index.html"
+# Bricolage Grotesque (SIL Open Font License 1.1, see bricolage-OFL.txt),
+# cut down to Latin for the page's figures and Latin text.
+FONT = Path(__file__).with_name("static") / "bricolage.woff2"
 
 
 class RateLimit:
@@ -71,6 +74,7 @@ def create_app(paths: Paths, config: Config, sync: bool = True) -> FastAPI:
     enroll_limit = RateLimit(3, 3600)
     enroll_ip_limit = RateLimit(1, 60)
     page = PAGE.read_text(encoding="utf-8")
+    font_data = FONT.read_bytes()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -132,9 +136,15 @@ def create_app(paths: Paths, config: Config, sync: bool = True) -> FastAPI:
     def index():
         nonce = secrets.token_urlsafe(16)
         csp = ("default-src 'none'; script-src 'nonce-{0}'; style-src 'nonce-{0}'; connect-src 'self'; "
-               "img-src 'self' https: data:; media-src 'self'; base-uri 'none'; form-action 'none'; "
-               "frame-ancestors 'none'").format(nonce)
+               "img-src 'self' https: data:; media-src 'self'; font-src 'self'; base-uri 'none'; "
+               "form-action 'none'; frame-ancestors 'none'").format(nonce)
         return HTMLResponse(page.replace("__NONCE__", nonce), headers={"Content-Security-Policy": csp})
+
+    # The sign-in page uses it too, so it is served without a session.
+    @app.get("/static/bricolage.woff2")
+    def font():
+        return Response(font_data, media_type="font/woff2",
+                        headers={"Cache-Control": "public, max-age=2592000"})
 
     # endregion
     # region Sign-in
